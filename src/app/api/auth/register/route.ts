@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 
+/**
+ * POST /api/auth/register
+ * Body: { email, password, name }
+ *
+ * Registers a new user. Password is hashed with bcrypt (salt rounds 8)
+ * before storing in DB. Returns 409 if email already exists.
+ *
+ * After registration, the frontend calls signIn('credentials') automatically
+ * to log the user in.
+ */
 const MIN_PASSWORD_LENGTH = 8;
 
 export async function POST(req: NextRequest) {

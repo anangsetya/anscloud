@@ -77,16 +77,7 @@ export default function Home() {
     refetchStorage();
   }, [refetchStorage]);
 
-  // Auto-seed demo data on first visit if there are no accounts.
-  useEffect(() => {
-    if (storageLoading) return;
-    if (storageData && storageData.aggregate.accountCount === 0) {
-      // Fire-and-forget seed; user can delete later.
-      fetch('/api/seed-demo', { method: 'POST' })
-        .then(() => refetchStorage())
-        .catch(() => {});
-    }
-  }, [storageLoading, storageData, refetchStorage]);
+  // No auto-seed — users connect real Google Drive accounts.
 
   // Watch currentFolderId changes from FileBrowser (lifted up so the upload
   // dialog knows which folder to upload into).

@@ -97,18 +97,14 @@ export default function SharedFilePage() {
   }
 
   return (
-    <div className="flex min-h-screen w-full items-center justify-center bg-gradient-to-br from-emerald-50 via-background to-teal-50 p-4 dark:from-emerald-950/20 dark:via-background dark:to-teal-950/20">
+    <div className="flex min-h-screen w-full items-center justify-center bg-background p-4">
       <div className="w-full max-w-3xl">
-        {/* Brand */}
-        <div className="mb-6 flex items-center justify-center gap-3">
-          <AnsCloudLogo className="h-12 w-12 shrink-0 drop-shadow-sm" />
-          <div className="flex flex-col">
-            <span className="text-xl font-bold leading-tight">AnsCloud</span>
-            <span className="text-xs text-muted-foreground leading-tight">Shared File</span>
-          </div>
+        <div className="mb-8 flex items-center justify-center gap-3">
+          <AnsCloudLogo className="h-10 w-10 shrink-0" />
+          <span className="text-xl font-semibold tracking-tight">AnsCloud</span>
         </div>
 
-        <Card className="ios-card shadow-xl">
+        <Card>
           <CardContent className="p-6">
             {loading ? (
               <div className="flex h-40 flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -146,7 +142,7 @@ export default function SharedFilePage() {
                   />
                 </div>
                 <Button
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 ios-pressable"
+                  className="w-full"
                   onClick={() => password && loadShare(password)}
                   disabled={!password}
                 >
@@ -170,7 +166,7 @@ export default function SharedFilePage() {
                   </div>
                   <Button
                     onClick={handleDownload}
-                    className="bg-emerald-600 hover:bg-emerald-700 ios-pressable"
+                    className=""
                   >
                     <Download className="mr-2 h-4 w-4" />
                     Download
@@ -191,9 +187,7 @@ export default function SharedFilePage() {
           </CardContent>
         </Card>
 
-        <p className="mt-6 text-center text-xs text-muted-foreground">
-          © {new Date().getFullYear()} AnsCloud · Powered by AnsCloud Multi-Cloud Storage
-        </p>
+        <p className="mt-6 text-center text-xs text-muted-foreground">© 2026 AnsCloud</p>
       </div>
     </div>
   );

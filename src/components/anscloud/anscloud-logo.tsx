@@ -1,7 +1,5 @@
 /**
- * AnsCloud logo — cloud shape with letter "A" inside, emerald-teal gradient.
- * Used in sidebar brand, login page, and other places that show the brand.
- *
+ * AnsCloud logo — monochrome glass cloud with letter "A" inside.
  * Sized via `className` (e.g., "h-9 w-9" or "h-12 w-12").
  */
 export function AnsCloudLogo({ className }: { className?: string }) {
@@ -14,23 +12,23 @@ export function AnsCloudLogo({ className }: { className?: string }) {
       aria-hidden="true"
     >
       <defs>
-        <linearGradient id="anscloud-brand-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#10b981" />
-          <stop offset="100%" stopColor="#0d9488" />
+        <linearGradient id="anscloud-glass" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#94A3B8" />
+          <stop offset="100%" stopColor="#64748B" />
         </linearGradient>
       </defs>
-      {/* Cloud shape */}
+      {/* Cloud shape — symmetrical */}
       <path
-        d="M20 44 C12 44 8 38 8 32 C8 26 13 22 18 22 C19 14 26 10 32 10 C40 10 46 16 47 23 C53 23 56 28 56 33 C56 39 51 44 45 44 Z"
-        fill="url(#anscloud-brand-grad)"
+        d="M18 44 C10 44 6 38 6 32 C6 26 11 22 16 22 C17 14 24 9 32 9 C40 9 47 14 48 22 C54 22 58 27 58 32 C58 38 53 44 46 44 Z"
+        fill="url(#anscloud-glass)"
       />
-      {/* Letter A (white, geometric) */}
+      {/* Letter A (white, geometric, centered) */}
       <path
-        d="M32 22 L26 38 L29 38 L30.2 34.5 L33.8 34.5 L35 38 L38 38 Z M31 31.5 L32 28 L33 31.5 Z"
+        d="M32 21 L25.5 38 L29 38 L30.4 33.5 L33.6 33.5 L35 38 L38.5 38 Z M30.9 31 L32 27.5 L33.1 31 Z"
         fill="#ffffff"
       />
-      {/* Storage layer line below A */}
-      <rect x="22" y="40" width="20" height="1.5" rx="0.75" fill="#ffffff" opacity="0.6" />
+      {/* Subtle storage line */}
+      <rect x="21" y="40" width="22" height="1.2" rx="0.6" fill="#ffffff" opacity="0.4" />
     </svg>
   );
 }

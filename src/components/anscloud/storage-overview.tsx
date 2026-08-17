@@ -83,7 +83,7 @@ export function StorageOverview({ data, loading }: StorageOverviewProps) {
           label="Total Kapasitas"
           value={aggregate.totalBytesFormatted}
           subtitle={`${aggregate.accountCount} akun tergabung`}
-          color="from-emerald-500 to-teal-600"
+          color="from-blue-500 to-indigo-600"
         />
         <StatCard
           icon={<HardDrive className="h-5 w-5" />}
@@ -273,7 +273,7 @@ function AccountCard({
 }) {
   const usedPct = account.usedPct;
   const colorClass =
-    usedPct > 85 ? 'bg-rose-500' : usedPct > 65 ? 'bg-amber-500' : 'bg-emerald-500';
+    usedPct > 85 ? 'bg-rose-500' : usedPct > 65 ? 'bg-amber-500' : 'bg-primary';
 
   return (
     <Card>
