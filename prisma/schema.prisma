@@ -9,7 +9,7 @@ datasource db {
   // PostgreSQL via Neon (recommended for Vercel deploy).
   // Fallback to SQLite for local dev: just change provider to "sqlite"
   // and DATABASE_URL to file:./db/custom.db
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
