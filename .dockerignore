@@ -1,0 +1,58 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Next.js build output
+.next
+out
+
+# Production
+build
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Local env files
+.env
+.env*.local
+
+# Vercel
+.vercel
+
+# IDE
+.idea
+.vscode
+*.swp
+
+# Git
+.git
+.gitignore
+
+# Storage data (will be created as volume)
+storage
+db
+data
+
+# Logs
+*.log
+dev.log
+server.log
+
+# Test/CI
+coverage
+tests
+
+# Documentation (not needed at runtime)
+DEPLOYMENT.md
+README.md
+
+# Scripts that are only for dev
+.zscripts

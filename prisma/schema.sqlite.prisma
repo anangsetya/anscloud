@@ -1,0 +1,165 @@
+// AnsCloud - Prisma Schema
+// Multi-user Google Drive aggregator with sharing & chunked upload support.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // PostgreSQL via Neon (recommended for Vercel deploy).
+  // Fallback to SQLite for local dev: just change provider to "sqlite"
+  // and DATABASE_URL to file:./db/custom.db
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Registered AnsCloud user. Each user has their own set of connected
+/// Google Drive accounts, files, folders, and shared links.
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String
+  // bcrypt-hashed password (salt rounds 12).
+  passwordHash  String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  accounts      DriveAccount[]
+  files         VirtualFile[]
+  folders       VirtualFolder[]
+  activityLogs  ActivityLog[]
+  sharedLinks   SharedLink[]
+}
+
+/// A connected Google Drive account.
+/// - provider='local'   → demo mode, files stored on local filesystem, simulated quota
+/// - provider='google'  → real Google Drive via OAuth2
+model DriveAccount {
+  id            String   @id @default(cuid())
+  userId        String
+  email         String
+  displayName   String
+  avatarColor   String   @default("#0A84FF")
+  provider      String   @default("local")
+  // OAuth fields — only populated when provider='google'
+  accessToken   String?
+  refreshToken  String?
+  tokenExpiresAt DateTime?
+  driveRootFolderId String?
+  totalBytes    BigInt   @default(16106127360)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  files         VirtualFile[]
+  fileVersions  FileVersion[]
+
+  @@unique([userId, email])
+  @@index([userId])
+}
+
+/// A virtual folder in the unified AnsCloud namespace.
+model VirtualFolder {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  parentId  String?
+  icon      String   @default("folder")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent    VirtualFolder?  @relation("FolderChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children  VirtualFolder[] @relation("FolderChildren")
+  files     VirtualFile[]
+
+  @@index([userId])
+}
+
+/// A virtual file. The actual bytes live on exactly ONE DriveAccount.
+model VirtualFile {
+  id              String   @id @default(cuid())
+  userId          String
+  name            String
+  mimeType        String
+  sizeBytes       BigInt
+  driveAccountId  String
+  physicalFileId  String
+  folderId        String?
+  isStarred       Boolean  @default(false)
+  deletedAt       DateTime?
+  /// Current version number (incremented when a new version is uploaded).
+  /// Version 1 = original upload. Version N = (N-1) overwrites later.
+  currentVersion  Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  driveAccount    DriveAccount   @relation(fields: [driveAccountId], references: [id], onDelete: Cascade)
+  folder          VirtualFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  sharedLinks     SharedLink[]
+  versions        FileVersion[]
+
+  @@index([deletedAt])
+  @@index([isStarred])
+  @@index([userId])
+  @@index([driveAccountId])
+}
+
+/// File version history — every upload of a file with the same name in
+/// the same folder creates a new version instead of overwriting.
+/// The current version is the one stored on VirtualFile; older versions
+/// are stored here for restore.
+model FileVersion {
+  id              String   @id @default(cuid())
+  fileId          String
+  versionNumber   Int
+  physicalFileId  String
+  driveAccountId  String
+  sizeBytes       BigInt
+  mimeType        String
+  createdAt       DateTime @default(now())
+
+  file            VirtualFile   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  driveAccount    DriveAccount  @relation(fields: [driveAccountId], references: [id], onDelete: Cascade)
+
+  @@index([fileId])
+  @@unique([fileId, versionNumber])
+}
+
+/// Shared file link — anyone with the token can access the file
+/// without logging in. Optional expiry date & password protection.
+model SharedLink {
+  id          String    @id @default(cuid())
+  token       String    @unique @default(cuid())
+  fileId      String
+  userId      String
+  // Optional password (bcrypt-hashed) for protected links
+  passwordHash String?
+  // Optional expiry (null = never expires)
+  expiresAt   DateTime?
+  downloadLimit Int?
+  downloadCount Int @default(0)
+  createdAt   DateTime  @default(now())
+
+  file        VirtualFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([fileId])
+  @@index([userId])
+}
+
+/// Activity log — records all file operations for audit.
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String
+  fileName  String?
+  sizeBytes BigInt?
+  details   String?
+  createdAt DateTime @default(now())
+
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="fav-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#fav-grad)"/>
+  <!-- Cloud shape (white) -->
+  <path d="M22 44 C16 44 12 40 12 35 C12 30 16 27 20 27 C21 21 26 18 31 18 C38 18 42 23 43 28 C48 28 51 31 51 35 C51 40 47 44 42 44 Z" fill="#ffffff"/>
+  <!-- Letter A inside cloud -->
+  <path d="M32 24 L27 38 L29.5 38 L30.5 34.5 L33.5 34.5 L34.5 38 L37 38 Z M31 32 L32 28 L33 32 Z" fill="#0d9488"/>
+</svg>

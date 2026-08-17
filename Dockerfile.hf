@@ -1,0 +1,45 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Hugging Face Spaces configuration for AnsCloud
+#
+# This file tells Hugging Face Spaces to use Docker to build AnsCloud.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Use the official Bun image as base
+FROM oven/bun:1 AS base
+
+# Install system dependencies needed for Sharp (image processing) & Prisma
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install dependencies
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+
+# Copy source code
+COPY . .
+
+# Create data directory for SQLite + storage (Hugging Face persistent storage)
+RUN mkdir -p /data/db /data/storage
+
+# Set environment variables
+ENV DATABASE_URL=file:/data/db/custom.db
+ENV PORT=7860
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV HOST=0.0.0.0
+
+# Initialize database
+RUN bun run db:push
+
+# Build the application
+RUN bun run build
+
+# Expose port (Hugging Face Spaces requires 7860)
+EXPOSE 7860
+
+# Start the application
+CMD ["bun", "run", "start"]

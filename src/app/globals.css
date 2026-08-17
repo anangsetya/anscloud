@@ -1,0 +1,283 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans), -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "Menlo", "Monaco", monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-full: 9999px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   APPLE DESIGN SYSTEM — macOS Big Sur / Sonoma inspired
+   ════════════════════════════════════════════════════════════════════════
+
+   LIGHT MODE (like apple.com, iCloud.com):
+     • Background: #F5F5F7 (soft warm gray)
+     • Cards: #FFFFFF pure white with NO shadow — just border
+     • Sidebar: translucent with backdrop-blur (macOS vibrancy)
+     • Buttons: pill-shaped (border-radius: 9999px), filled blue
+     • Accent: #0071E3 (Apple web blue)
+     • Text: #1D1D1F (near-black, not pure black)
+
+   DARK MODE (like macOS dark / Apple TV):
+     • Background: #000000 (TRUE BLACK — OLED)
+     • Cards: #1C1C1E (elevated, NO shadow — border only)
+     • Sidebar: translucent dark with backdrop-blur
+     • Accent: #0A84FF (Apple system blue dark)
+     • Text: #F5F5F7 (warm white)
+     • Borders: subtle, low opacity
+   ════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --radius: 0.625rem; /* 10px — Apple's standard radius for most UI elements */
+
+  /* Background & Surfaces */
+  --background: oklch(0.97 0.003 250);              /* #F5F5F7 — Apple systemGroupedBackground */
+  --foreground: oklch(0.18 0.006 250);              /* #1D1D1F — Apple label */
+  --card: oklch(1 0 0);                               /* #FFFFFF — pure white */
+  --card-foreground: oklch(0.18 0.006 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.006 250);
+
+  /* Accent — Apple Blue */
+  --primary: oklch(0.55 0.22 255);                   /* #0071E3 — apple.com blue */
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.93 0.003 250);                /* #E8E8ED */
+  --secondary-foreground: oklch(0.18 0.006 250);
+  --muted: oklch(0.93 0.003 250);
+  --muted-foreground: oklch(0.46 0.006 250);         /* #6E6E73 — Apple secondaryLabel */
+  --accent: oklch(0.93 0.006 250);
+  --accent-foreground: oklch(0.18 0.006 250);
+
+  /* Apple System Colors */
+  --destructive: oklch(0.60 0.24 27);                /* #FF3B30 — systemRed */
+  --border: oklch(0.88 0.003 250 / 60%);              /* #D1D1D6 with transparency */
+  --input: oklch(0.88 0.003 250 / 60%);
+  --ring: oklch(0.55 0.22 255);
+
+  /* Chart colors — Apple system colors */
+  --chart-1: oklch(0.55 0.22 255);  /* blue #007AFF */
+  --chart-2: oklch(0.70 0.19 149);  /* green #34C759 */
+  --chart-3: oklch(0.75 0.18 71);   /* orange #FF9500 */
+  --chart-4: oklch(0.55 0.24 297);  /* purple #AF52DE */
+  --chart-5: oklch(0.65 0.21 8);    /* red #FF3B30 */
+
+  /* Sidebar — macOS vibrancy (translucent) */
+  --sidebar: oklch(0.96 0.003 250 / 80%);             /* translucent warm gray */
+  --sidebar-foreground: oklch(0.18 0.006 250);
+  --sidebar-primary: oklch(0.55 0.22 255);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.93 0.006 250 / 70%);
+  --sidebar-accent-foreground: oklch(0.18 0.006 250);
+  --sidebar-border: oklch(0.88 0.003 250 / 50%);
+  --sidebar-ring: oklch(0.55 0.22 255);
+}
+
+.dark {
+  /* TRUE BLACK OLED dark mode — like macOS dark mode */
+  --background: oklch(0 0 0);                         /* #000000 — pure black */
+  --foreground: oklch(0.97 0.003 250);                /* #F5F5F7 */
+  --card: oklch(0.11 0.003 250);                      /* #1C1C1E — elevated surface */
+  --card-foreground: oklch(0.97 0.003 250);
+  --popover: oklch(0.13 0.003 250);                   /* #2C2C2E */
+  --popover-foreground: oklch(0.97 0.003 250);
+
+  /* Apple dark blue */
+  --primary: oklch(0.60 0.22 255);                    /* #0A84FF */
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.16 0.003 250);                 /* #28282A */
+  --secondary-foreground: oklch(0.97 0.003 250);
+  --muted: oklch(0.16 0.003 250);
+  --muted-foreground: oklch(0.60 0.006 250);           /* #98989D */
+  --accent: oklch(0.16 0.006 250);
+  --accent-foreground: oklch(0.97 0.003 250);
+
+  --destructive: oklch(0.65 0.22 25);                 /* #FF453A */
+  --border: oklch(0.22 0.003 250 / 50%);
+  --input: oklch(0.22 0.003 250 / 50%);
+  --ring: oklch(0.60 0.22 255);
+
+  --chart-1: oklch(0.60 0.22 255);
+  --chart-2: oklch(0.75 0.20 149);
+  --chart-3: oklch(0.80 0.19 71);
+  --chart-4: oklch(0.62 0.24 297);
+  --chart-5: oklch(0.68 0.23 8);
+
+  /* Sidebar — macOS dark vibrancy */
+  --sidebar: oklch(0.08 0.003 250 / 80%);              /* translucent near-black */
+  --sidebar-foreground: oklch(0.97 0.003 250);
+  --sidebar-primary: oklch(0.60 0.22 255);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.16 0.006 250 / 70%);
+  --sidebar-accent-foreground: oklch(0.97 0.003 250);
+  --sidebar-border: oklch(0.22 0.003 250 / 40%);
+  --sidebar-ring: oklch(0.60 0.22 255);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.022em;
+    font-feature-settings: "ss01";
+  }
+
+  /* Apple-style focus rings — subtle blue glow */
+  *:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* Apple-style scrollbar — thin, auto-hiding */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.50 0.006 250 / 0.2);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.50 0.006 250 / 0.35);
+  }
+
+  /* Apple blue text selection */
+  ::selection {
+    background: oklch(0.55 0.22 255 / 0.2);
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   APPLE-STYLE COMPONENTS
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* Apple card — NO shadow, just border (like apple.com product cards) */
+.apple-card {
+  border-radius: var(--radius-2xl);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+.dark .apple-card {
+  border: 1px solid oklch(0.22 0.003 250 / 40%);
+  box-shadow: none;
+}
+
+/* Apple pressable — subtle scale on active */
+.apple-pressable {
+  transition: transform 0.1s cubic-bezier(0.25, 0.1, 0.25, 1), opacity 0.1s ease;
+}
+.apple-pressable:active {
+  transform: scale(0.97);
+  opacity: 0.75;
+}
+
+/* Apple hover — subtle background change */
+.apple-hover {
+  transition: background-color 0.15s ease;
+}
+.apple-hover:hover {
+  background-color: oklch(0.93 0.006 250 / 0.5);
+}
+.dark .apple-hover:hover {
+  background-color: oklch(0.16 0.006 250 / 0.5);
+}
+
+/* macOS sidebar vibrancy — translucent with blur */
+.apple-sidebar {
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+
+/* Apple blue link */
+.link-blue {
+  color: var(--primary);
+  text-decoration: none;
+}
+.link-blue:hover {
+  text-decoration: underline;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   BACKWARD COMPATIBILITY — old class names still work
+   ════════════════════════════════════════════════════════════════════════ */
+
+.ios-card {
+  border-radius: var(--radius-2xl);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+.dark .ios-card {
+  border: 1px solid oklch(0.22 0.003 250 / 40%);
+  box-shadow: none;
+}
+
+.ios-pressable {
+  transition: transform 0.1s cubic-bezier(0.25, 0.1, 0.25, 1), opacity 0.1s ease;
+}
+.ios-pressable:active {
+  transform: scale(0.97);
+  opacity: 0.75;
+}
+
+.glass {
+  background: var(--sidebar);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+.dark .glass {
+  background: var(--sidebar);
+}
+
+.ios-sheet {
+  animation: apple-sheet-enter 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes apple-sheet-enter {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
