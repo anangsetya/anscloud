@@ -23,6 +23,7 @@ import {
   ArrowUpDown,
   FolderSync,
   ArrowRightLeft,
+  ArrowLeft,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -146,6 +147,9 @@ export function FileBrowser({
   const [moveDriveFolders, setMoveDriveFolders] = useState<string[]>([]);
   const [moving, setMoving] = useState(false);
 
+  // Navigation history for back button
+  const [navHistory, setNavHistory] = useState<Array<{ folderId: string | null; drivePath: string | null }>>([]);
+
   const { toast } = useToast();
 
   // ─── Load files ───────────────────────────────────────────────
@@ -225,10 +229,24 @@ export function FileBrowser({
     // Check if it's a Drive folder (id starts with "drive:")
     if (folderId && folderId.startsWith('drive:')) {
       const path = folderId.slice(6);
+      // Push current state to history
+      setNavHistory((h) => [...h, { folderId: currentFolderId, drivePath: currentDrivePath }]);
       setCurrentDrivePath(path);
       return;
     }
+    // Push current state to history
+    setNavHistory((h) => [...h, { folderId: currentFolderId, drivePath: currentDrivePath }]);
     onFolderChange(folderId);
+  }
+
+  function handleGoBack() {
+    if (navHistory.length === 0) return;
+    const prev = navHistory[navHistory.length - 1];
+    setNavHistory((h) => h.slice(0, -1));
+    setCurrentDrivePath(prev.drivePath);
+    if (prev.folderId !== currentFolderId) {
+      onFolderChange(prev.folderId);
+    }
   }
 
   function handleNavigateDrivePath(path: string | null) {
@@ -567,13 +585,26 @@ export function FileBrowser({
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Breadcrumb, sort, and view controls */}
       <div className="flex flex-wrap items-center gap-1 border-b px-4 py-3 text-sm">
+        {/* Back button */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={handleGoBack}
+          disabled={navHistory.length === 0}
+          title="Kembali"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
         <button
           onClick={() => {
             if (currentDrivePath) {
               // Go back to root drive view
+              setNavHistory([]);
               setCurrentDrivePath(null);
               setDrivePathBreadcrumb([]);
             } else {
+              setNavHistory([]);
               onFolderChange(null);
             }
           }}
@@ -1112,10 +1143,14 @@ function Row({
           onDragOverFolder(null);
         }
       }}
-      onClick={() => {
-        if (bulkMode) {
+      onClick={(e) => {
+        e.stopPropagation();
+        if (isFile) {
           onToggleSelect(item.id);
-        } else if (isFile) {
+        }
+      }}
+      onDoubleClick={() => {
+        if (isFile) {
           onPreview(item);
         } else {
           onOpenFolder(item.id);
@@ -1334,9 +1369,12 @@ function GridView(props: {
                 props.onDragOverFolder(null);
               }
             }}
-            onClick={() => {
-              if (bulkMode) onToggleSelect(item.id);
-              else if (isFile) props.onPreview(item);
+            onClick={(e) => {
+              e.stopPropagation();
+              if (isFile) onToggleSelect(item.id);
+            }}
+            onDoubleClick={() => {
+              if (isFile) props.onPreview(item);
               else props.onOpenFolder(item.id);
             }}
           >
