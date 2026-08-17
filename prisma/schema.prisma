@@ -47,6 +47,7 @@ model DriveAccount {
   tokenExpiresAt DateTime?
   driveRootFolderId String?
   totalBytes    BigInt   @default(16106127360)
+  usedBytes     BigInt   @default(0n)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

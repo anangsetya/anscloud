@@ -1,3 +1,6 @@
+// File: src/lib/storage.ts
+// REPLACE file lama dengan ini
+
 import { db } from './db';
 import {
   localStoreFile,
@@ -26,9 +29,6 @@ import {
  *   - 'google' → GoogleDriveProvider (real Google Drive via OAuth)
  *   - 'local'  → Supabase Storage (if SUPABASE_URL is set) — used in production
  *              → Local filesystem (fallback for local dev)
- *
- * Function signatures are intentionally identical across providers so the
- * rest of the app does not need to know which provider is in use.
  */
 
 type FileInput = {
@@ -44,6 +44,7 @@ type AccountLike = {
   email: string;
   displayName: string;
   totalBytes: bigint;
+  usedBytes?: bigint;
   accessToken: string | null;
   refreshToken: string | null;
   tokenExpiresAt: Date | null;
@@ -52,27 +53,32 @@ type AccountLike = {
 
 /**
  * Compute the free bytes for a given drive account.
- * Used = sum of all VirtualFile.sizeBytes for that account (in our DB).
- * Free = totalBytes - used.
  *
- * Note: For provider='google', this DB-based "used" count may drift from
- * reality (because the user might have other files in their Drive unrelated
- * to AnsCloud). For accurate quota, call refreshAccountQuota() which hits
- * the Drive API directly. The DB-based count is used for fast UI rendering
- * and for the auto-distribution algorithm.
+ * For provider='google': uses stored usedBytes (from Drive API via refreshAccountQuota).
+ * For provider='local': sums VirtualFile.sizeBytes from DB.
  */
 export async function getAccountUsage(accountId: string) {
   const account = await db.driveAccount.findUnique({
     where: { id: accountId },
-    select: { totalBytes: true, provider: true, userId: true },
+    select: { totalBytes: true, usedBytes: true, provider: true, userId: true },
   });
   if (!account) throw new Error('Account not found');
 
-  const usedAgg = await db.virtualFile.aggregate({
-    where: { driveAccountId: accountId },
-    _sum: { sizeBytes: true },
-  });
-  const usedBytes = usedAgg._sum.sizeBytes ?? 0n;
+  let usedBytes: bigint;
+
+  if (account.provider === 'google') {
+    // For Google accounts, use the stored usedBytes from Drive API quota.
+    // This reflects the REAL Drive usage (including non-AnsCloud files).
+    usedBytes = (account as any).usedBytes ?? 0n;
+  } else {
+    // For local accounts, compute from VirtualFiles in DB.
+    const usedAgg = await db.virtualFile.aggregate({
+      where: { driveAccountId: accountId },
+      _sum: { sizeBytes: true },
+    });
+    usedBytes = usedAgg._sum.sizeBytes ?? 0n;
+  }
+
   const totalBytes = account.totalBytes;
   const freeBytes = totalBytes > usedBytes ? totalBytes - usedBytes : 0n;
   return {
@@ -88,19 +94,28 @@ export async function getAccountUsage(accountId: string) {
 export async function getAggregateUsage(userId: string) {
   const accounts = await db.driveAccount.findMany({
     where: { userId },
-    select: { id: true, totalBytes: true },
+    select: { id: true, totalBytes: true, provider: true, usedBytes: true },
   });
   if (accounts.length === 0) {
     return { totalBytes: 0n, usedBytes: 0n, freeBytes: 0n, usedPct: 0, accountCount: 0 };
   }
-  let total = 0n;
-  for (const a of accounts) total += a.totalBytes;
 
-  const usedAgg = await db.virtualFile.aggregate({
-    where: { userId },
-    _sum: { sizeBytes: true },
-  });
-  const used = usedAgg._sum.sizeBytes ?? 0n;
+  let total = 0n;
+  let used = 0n;
+
+  for (const a of accounts) {
+    total += a.totalBytes;
+    if (a.provider === 'google') {
+      used += (a as any).usedBytes ?? 0n;
+    } else {
+      const usedAgg = await db.virtualFile.aggregate({
+        where: { driveAccountId: a.id },
+        _sum: { sizeBytes: true },
+      });
+      used += usedAgg._sum.sizeBytes ?? 0n;
+    }
+  }
+
   return {
     totalBytes: total,
     usedBytes: used,
@@ -113,9 +128,6 @@ export async function getAggregateUsage(userId: string) {
 /**
  * Auto-distribution algorithm — pick the account with the MOST free space
  * that can still hold the file. Balances load across drives naturally.
- *
- * For files larger than any single drive's free space, surfaces a clear
- * error rather than silently failing.
  */
 export async function pickAccountForFile(userId: string, sizeBytes: bigint) {
   const accounts = await db.driveAccount.findMany({
@@ -123,6 +135,7 @@ export async function pickAccountForFile(userId: string, sizeBytes: bigint) {
     select: {
       id: true,
       totalBytes: true,
+      usedBytes: true,
       email: true,
       displayName: true,
       provider: true,
@@ -177,8 +190,6 @@ export async function pickAccountForFile(userId: string, sizeBytes: bigint) {
 
 /**
  * Store a file blob via the correct provider.
- * - 'google' → Google Drive API
- * - 'local'  → Supabase Storage (production) or local filesystem (dev)
  */
 export async function storeFile(
   account: AccountLike,
@@ -187,7 +198,6 @@ export async function storeFile(
   if (account.provider === 'google') {
     return googleDriveStoreFile(account, file);
   }
-  // For 'local' provider: use Supabase if configured, else local filesystem
   if (isSupabaseConfigured()) {
     return supabaseStoreFile(account.id, file);
   }
@@ -222,7 +232,7 @@ export async function deleteFile(account: AccountLike, physicalFileId: string): 
 
 /**
  * Refresh the quota of a 'google' account from the Drive API.
- * For 'local' accounts, this is a no-op (quota is user-set).
+ * Stores BOTH totalBytes and usedBytes to DB.
  */
 export async function refreshAccountQuota(accountId: string): Promise<{
   totalBytes: bigint;
@@ -233,24 +243,23 @@ export async function refreshAccountQuota(accountId: string): Promise<{
 
   if (account.provider === 'google') {
     const quota = await fetchGoogleDriveQuota(account);
-    // Persist the live quota back to DB so future reads are fast.
+    // Persist BOTH totalBytes AND usedBytes to DB
     await db.driveAccount.update({
       where: { id: accountId },
-      data: { totalBytes: quota.totalBytes },
+      data: {
+        totalBytes: quota.totalBytes,
+        usedBytes: quota.usedBytes,
+      },
     });
     return quota;
   }
 
-  // local provider: just return what's stored in DB
   const usage = await getAccountUsage(accountId);
   return { totalBytes: usage.totalBytes, usedBytes: usage.usedBytes };
 }
 
 /**
- * Cleanup all physical blobs owned by an account. Called when an account
- * is disconnected. For 'local', removes the bucket directory; for 'google',
- * this is a no-op (we don't delete the user's files from their real Drive
- * unless they explicitly delete each file in the UI).
+ * Cleanup all physical blobs owned by an account.
  */
 export async function cleanupAccountStorage(accountId: string): Promise<void> {
   const account = await db.driveAccount.findUnique({
@@ -260,10 +269,8 @@ export async function cleanupAccountStorage(accountId: string): Promise<void> {
   if (!account) return;
 
   if (account.provider === 'google') {
-    // 'google' files stay in user's real Drive — we don't delete them.
     return;
   }
-  // 'local' provider: cleanup via Supabase (if configured) or local filesystem
   if (isSupabaseConfigured()) {
     return supabaseCleanupAccount(accountId);
   }

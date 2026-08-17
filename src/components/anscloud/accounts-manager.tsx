@@ -12,6 +12,7 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronUp,
+  RefreshCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -54,6 +55,7 @@ interface AccountsManagerProps {
 export function AccountsManager({ accounts, loading, onChanged }: AccountsManagerProps) {
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
   const [oauthConfigured, setOauthConfigured] = useState<boolean | null>(null);
   const [showGuide, setShowGuide] = useState(false);
   const { toast } = useToast();
@@ -82,6 +84,31 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
         toast({ title: 'Gagal', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
       } finally {
         setRefreshingId(null);
+      }
+    },
+    [onChanged, toast]
+  );
+
+  const handleSyncDrive = useCallback(
+    async (accountId: string) => {
+      setSyncingId(accountId);
+      try {
+        const res = await fetch('/api/accounts/sync-drive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal sinkronisasi');
+        toast({
+          title: 'Sinkronisasi selesai',
+          description: `${data.created} file baru, ${data.updated} diperbarui dari ${data.syncableFiles} file.`,
+        });
+        onChanged();
+      } catch (e) {
+        toast({ title: 'Sync gagal', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
+      } finally {
+        setSyncingId(null);
       }
     },
     [onChanged, toast]
@@ -121,7 +148,6 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
         </Card>
       )}
 
-      {/* Setup guide — collapsible */}
       {showGuide && <SetupGuide />}
 
       {loading ? (
@@ -141,7 +167,15 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {accounts.map((acc) => (
-            <AccountCard key={acc.id} account={acc} onDelete={() => setDeleteTarget(acc)} onRefreshQuota={handleRefreshQuota} refreshing={refreshingId === acc.id} />
+            <AccountCard
+              key={acc.id}
+              account={acc}
+              onDelete={() => setDeleteTarget(acc)}
+              onRefreshQuota={handleRefreshQuota}
+              onSyncDrive={handleSyncDrive}
+              refreshing={refreshingId === acc.id}
+              syncing={syncingId === acc.id}
+            />
           ))}
         </div>
       )}
@@ -228,7 +262,21 @@ ANSCLOUD_PUBLIC_URL=https://domain-anda.com`}</code>
 
 /* ── Account Card ───────────────────────────────────── */
 
-function AccountCard({ account, onDelete, onRefreshQuota, refreshing }: { account: Account; onDelete: () => void; onRefreshQuota: (id: string) => void; refreshing: boolean }) {
+function AccountCard({
+  account,
+  onDelete,
+  onRefreshQuota,
+  onSyncDrive,
+  refreshing,
+  syncing,
+}: {
+  account: Account;
+  onDelete: () => void;
+  onRefreshQuota: (id: string) => void;
+  onSyncDrive: (id: string) => void;
+  refreshing: boolean;
+  syncing: boolean;
+}) {
   const colorClass = account.usedPct > 85 ? 'bg-rose-500' : account.usedPct > 65 ? 'bg-amber-500' : 'bg-primary';
   const isGoogle = account.provider === 'google';
 
@@ -236,7 +284,10 @@ function AccountCard({ account, onDelete, onRefreshQuota, refreshing }: { accoun
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold text-white" style={{ backgroundColor: account.avatarColor }}>
+          <div
+            className="flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold text-white"
+            style={{ backgroundColor: account.avatarColor }}
+          >
             {account.displayName.charAt(0).toUpperCase()}
           </div>
           <div className="min-w-0 flex-1">
@@ -254,23 +305,56 @@ function AccountCard({ account, onDelete, onRefreshQuota, refreshing }: { accoun
           </div>
           <div className="flex flex-col gap-1">
             {isGoogle && (
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onRefreshQuota(account.id)} disabled={refreshing} title="Refresh kuota">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => onSyncDrive(account.id)}
+                disabled={syncing || refreshing}
+                title="Sinkronisasi file dari Drive"
+              >
+                <RefreshCcw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} />
+              </Button>
+            )}
+            {isGoogle && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => onRefreshQuota(account.id)}
+                disabled={refreshing || syncing}
+                title="Refresh kuota"
+              >
                 <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
               </Button>
             )}
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-rose-600" onClick={onDelete}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-rose-600"
+              onClick={onDelete}
+            >
               <Trash2 className="h-4 w-4" />
             </Button>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        {isGoogle && syncing && (
+          <div className="flex items-center gap-2 rounded-lg bg-blue-50 p-2 text-xs text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span>Menyinkronisasi file dari Google Drive…</span>
+          </div>
+        )}
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">Terpakai</span>
           <span className="font-medium">{account.usedBytesFormatted} / {account.totalBytesFormatted}</span>
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-          <div className={cn('h-full rounded-full transition-all duration-500', colorClass)} style={{ width: `${Math.min(100, account.usedPct)}%` }} />
+          <div
+            className={cn('h-full rounded-full transition-all duration-500', colorClass)}
+            style={{ width: `${Math.min(100, account.usedPct)}%` }}
+          />
         </div>
         <div className="flex justify-between text-xs text-muted-foreground">
           <span>{account.fileCount} file</span>
