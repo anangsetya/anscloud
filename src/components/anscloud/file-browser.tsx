@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   ChevronRight,
   Download,
@@ -20,11 +20,22 @@ import {
   History,
   FileArchive,
   Loader2,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  FolderInput,
+  FileText,
+  Table as TableIcon,
+  Image as ImageIcon,
+  Video,
+  Music,
+  FileQuestion,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Dialog,
   DialogContent,
@@ -39,6 +50,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { FileIcon, FolderIcon } from './file-icon';
@@ -74,6 +86,9 @@ interface FileItem {
 }
 type Item = FolderItem | FileItem;
 
+type SortKey = 'name' | 'size' | 'date' | 'type' | 'location';
+type SortOrder = 'asc' | 'desc';
+
 interface FileBrowserProps {
   refreshKey: number;
   search: string;
@@ -81,6 +96,19 @@ interface FileBrowserProps {
   currentFolderId: string | null;
   onFolderChange: (id: string | null) => void;
   filter?: 'recent' | 'starred' | 'trash' | null;
+}
+
+/** Simple client-side categorizer (mirrors server-side categorizeFile logic) */
+function clientCategorizeFile(mimeType: string, filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  const mime = (mimeType || '').toLowerCase();
+  if (mime.startsWith('image/') || ['jpg','jpeg','png','gif','webp','bmp','svg','tiff','tif','ico','heic','heif','raw','psd','ai'].includes(ext)) return 'Images';
+  if (mime === 'application/pdf' || ext === 'pdf') return 'PDF';
+  if (mime.includes('word') || mime.includes('officedocument.wordprocessingml') || ['doc','docx','odt','rtf'].includes(ext)) return 'Word';
+  if (mime.includes('excel') || mime.includes('spreadsheet') || mime.includes('officedocument.spreadsheetml') || ['xls','xlsx','ods','csv','tsv'].includes(ext)) return 'Excel';
+  if (mime.startsWith('video/') || ['mp4','avi','mov','wmv','flv','webm','mkv','m4v','mpg','mpeg','3gp'].includes(ext)) return 'Video';
+  if (mime.startsWith('audio/') || ['mp3','wav','flac','aac','ogg','wma','m4a','opus','aiff'].includes(ext)) return 'Audio';
+  return 'Others';
 }
 
 export function FileBrowser({
@@ -107,8 +135,172 @@ export function FileBrowser({
   const [zipping, setZipping] = useState(false);
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
   const [draggingFileId, setDraggingFileId] = useState<string | null>(null);
+
+  // ── Sorting state ───────────────────────────────────────────
+  const [sortBy, setSortBy] = useState<SortKey>('name');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
+
+  // ── Move-to-folder dialog state ─────────────────────────────
+  const [moveTarget, setMoveTarget] = useState<FileItem | null>(null);
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+  const [moveFolders, setMoveFolders] = useState<Array<{ id: string; name: string; path?: string }>>([]);
+  const [moveLoading, setMoveLoading] = useState(false);
+  const [moveFetchLoading, setMoveFetchLoading] = useState(false);
+
   const { toast } = useToast();
 
+  // ── Sorting logic ───────────────────────────────────────────
+  function handleSort(key: SortKey) {
+    if (sortBy === key) {
+      setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(key);
+      setSortOrder('asc');
+    }
+  }
+
+  const sortedItems = useMemo(() => {
+    const folders = items.filter((i) => i.type === 'folder');
+    const files = items.filter((i) => i.type === 'file');
+
+    // Folders always sorted by name only.
+    folders.sort((a, b) => a.name.localeCompare(b.name, 'id-ID'));
+
+    // Sort files by the selected key.
+    const dir = sortOrder === 'asc' ? 1 : -1;
+    files.sort((a, b) => {
+      let cmp = 0;
+      switch (sortBy) {
+        case 'name':
+          cmp = a.name.localeCompare(b.name, 'id-ID');
+          break;
+        case 'size': {
+          const sa = Number(a.sizeBytes) || 0;
+          const sb = Number(b.sizeBytes) || 0;
+          cmp = sa - sb;
+          break;
+        }
+        case 'date':
+          cmp = (a.createdAt ?? '').localeCompare(b.createdAt ?? '');
+          break;
+        case 'type':
+          cmp = a.mimeType.localeCompare(b.mimeType);
+          break;
+        case 'location':
+          cmp = a.driveAccountEmail.localeCompare(b.driveAccountEmail);
+          break;
+      }
+      return cmp * dir;
+    });
+
+    return [...folders, ...files];
+  }, [items, sortBy, sortOrder]);
+
+  const sortLabels: Record<SortKey, string> = {
+    name: 'Nama',
+    size: 'Ukuran',
+    date: 'Terakhir diubah',
+    type: 'Jenis file',
+    location: 'Lokasi',
+  };
+
+  // ── Move-to-folder helpers ──────────────────────────────────
+  async function fetchAllFolders() {
+    setMoveFetchLoading(true);
+    try {
+      const res = await fetch('/api/folders');
+      if (!res.ok) throw new Error('Gagal mengambil daftar folder');
+      const data = await res.json();
+      const fetched: Array<{ id: string; name: string }> = data.folders ?? [];
+      setMoveFolders(fetched);
+    } catch (e) {
+      toast({
+        title: 'Gagal',
+        description: e instanceof Error ? e.message : 'Gagal mengambil folder',
+        variant: 'destructive',
+      });
+    } finally {
+      setMoveFetchLoading(false);
+    }
+  }
+
+  function openMoveDialog(file: FileItem) {
+    setMoveTarget(file);
+    setMoveDialogOpen(true);
+    fetchAllFolders();
+  }
+
+  async function handleMoveToFolder(folderId: string | null) {
+    if (!moveTarget) return;
+    setMoveLoading(true);
+    try {
+      const res = await fetch('/api/files', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: moveTarget.id, folderId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? 'Gagal memindahkan file');
+      }
+      toast({ title: 'Berhasil', description: 'File dipindahkan ke folder.' });
+      setMoveDialogOpen(false);
+      setMoveTarget(null);
+      onRefresh();
+    } catch (e) {
+      toast({
+        title: 'Gagal memindahkan',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setMoveLoading(false);
+    }
+  }
+
+  async function handleAutoCategorize() {
+    if (!moveTarget) return;
+    const categoryName = clientCategorizeFile(moveTarget.mimeType, moveTarget.name);
+
+    // Find or create the category folder.
+    // First check if it already exists among fetched folders.
+    const existing = moveFolders.find((f) => f.name === categoryName);
+    if (existing) {
+      await handleMoveToFolder(existing.id);
+      return;
+    }
+
+    // Create the folder, then move.
+    setMoveLoading(true);
+    try {
+      const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: categoryName }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? 'Gagal membuat folder');
+      }
+      const data = await res.json();
+      const newFolderId = data.folder?.id;
+      if (!newFolderId) throw new Error('Folder ID tidak ditemukan');
+      toast({ title: 'Berhasil', description: `File dipindahkan ke folder "${categoryName}".` });
+      setMoveDialogOpen(false);
+      setMoveTarget(null);
+      onRefresh();
+    } catch (e) {
+      toast({
+        title: 'Gagal',
+        description: e instanceof Error ? e.message : 'Gagal auto-kategorikan',
+        variant: 'destructive',
+      });
+    } finally {
+      setMoveLoading(false);
+    }
+  }
+
+  // ── Data loading ────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true);
     setSelectedIds(new Set());
@@ -161,8 +353,10 @@ export function FileBrowser({
     onFolderChange(folderId);
   }
 
-  function handleDownload(file: FileItem) {
-    window.open(`/api/download?id=${encodeURIComponent(file.id)}`, '_blank');
+  // ── FIXED: handleDownload accepts string | FileItem ─────────
+  function handleDownload(fileOrId: FileItem | string) {
+    const id = typeof fileOrId === 'string' ? fileOrId : fileOrId.id;
+    window.open(`/api/download?id=${encodeURIComponent(id)}`, '_blank');
   }
 
   function handlePreview(file: FileItem) {
@@ -440,6 +634,34 @@ export function FileBrowser({
               {bulkMode ? <X className="h-4 w-4" /> : <CheckSquare className="h-4 w-4" />}
             </Button>
           )}
+
+          {/* Sort dropdown button */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8" title="Urutkan">
+                <ArrowUpDown className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Urutkan berdasarkan</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {(['name', 'size', 'date', 'type', 'location'] as SortKey[]).map((key) => (
+                <DropdownMenuItem
+                  key={key}
+                  onClick={() => handleSort(key)}
+                  className="flex items-center justify-between gap-4"
+                >
+                  <span>{sortLabels[key]}</span>
+                  {sortBy === key && (
+                    sortOrder === 'asc'
+                      ? <ArrowUp className="h-3.5 w-3.5 text-emerald-600" />
+                      : <ArrowDown className="h-3.5 w-3.5 text-emerald-600" />
+                  )}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <Button
             variant={viewMode === 'list' ? 'default' : 'ghost'}
             size="icon"
@@ -521,7 +743,7 @@ export function FileBrowser({
           <EmptyState filter={filter} search={search} />
         ) : viewMode === 'list' ? (
           <ListView
-            items={items}
+            items={sortedItems}
             onOpenFolder={handleOpenFolder}
             onDownload={handleDownload}
             onPreview={handlePreview}
@@ -532,6 +754,7 @@ export function FileBrowser({
             onShare={(f) => setShareTarget({ id: f.id, name: f.name })}
             onVersion={(f) => setVersionTarget({ id: f.id, name: f.name })}
             onMoveFile={handleMoveFile}
+            onMoveToFolder={openMoveDialog}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={toggleSelect}
@@ -543,7 +766,7 @@ export function FileBrowser({
           />
         ) : (
           <GridView
-            items={items}
+            items={sortedItems}
             onOpenFolder={handleOpenFolder}
             onDownload={handleDownload}
             onPreview={handlePreview}
@@ -554,6 +777,7 @@ export function FileBrowser({
             onShare={(f) => setShareTarget({ id: f.id, name: f.name })}
             onVersion={(f) => setVersionTarget({ id: f.id, name: f.name })}
             onMoveFile={handleMoveFile}
+            onMoveToFolder={openMoveDialog}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={toggleSelect}
@@ -619,6 +843,147 @@ export function FileBrowser({
         onOpenChange={(o) => !o && setVersionTarget(null)}
         onRestored={onRefresh}
       />
+
+      {/* Move-to-folder dialog */}
+      <Dialog open={moveDialogOpen} onOpenChange={(o) => !o && setMoveDialogOpen(false)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Pindahkan ke Folder</DialogTitle>
+            <DialogDescription>
+              Pilih folder tujuan untuk &ldquo;{moveTarget?.name ?? ''}&rdquo;.
+            </DialogDescription>
+          </DialogHeader>
+
+          {moveFetchLoading ? (
+            <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Memuat folder…
+            </div>
+          ) : (
+            <div className="max-h-64 space-y-3 overflow-y-auto">
+              {/* Root option */}
+              <button
+                className="flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+                onClick={() => handleMoveToFolder(null)}
+                disabled={moveLoading}
+              >
+                <Home className="h-4 w-4 text-muted-foreground" />
+                <span>Root (tidak di folder)</span>
+              </button>
+
+              {/* Folder list */}
+              {moveFolders.map((folder) => (
+                <button
+                  key={folder.id}
+                  className="flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+                  onClick={() => handleMoveToFolder(folder.id)}
+                  disabled={moveLoading}
+                >
+                  <FolderIcon className="h-4 w-4 text-amber-500" />
+                  <span className="truncate">{folder.name}</span>
+                </button>
+              ))}
+
+              {moveFolders.length === 0 && (
+                <p className="text-center text-sm text-muted-foreground py-4">
+                  Belum ada folder.
+                </p>
+              )}
+
+              {/* Auto categorize section */}
+              <div className="border-t pt-3 mt-3">
+                <p className="text-xs font-medium text-muted-foreground mb-2">Auto kategorikan</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: 'PDF', icon: FileText, category: 'PDF' },
+                    { label: 'Word', icon: FileText, category: 'Word' },
+                    { label: 'Excel', icon: TableIcon, category: 'Excel' },
+                    { label: 'Images', icon: ImageIcon, category: 'Images' },
+                    { label: 'Video', icon: Video, category: 'Video' },
+                    { label: 'Audio', icon: Music, category: 'Audio' },
+                    { label: 'Others', icon: FileQuestion, category: 'Others' },
+                  ].map((cat) => (
+                    <Button
+                      key={cat.category}
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={async () => {
+                        // Set the target category on moveTarget's internal state
+                        // so handleAutoCategorize uses it
+                        if (!moveTarget) return;
+                        const existing = moveFolders.find((f) => f.name === cat.category);
+                        if (existing) {
+                          await handleMoveToFolder(existing.id);
+                        } else {
+                          // Create folder then move
+                          setMoveLoading(true);
+                          try {
+                            const res = await fetch('/api/folders', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ name: cat.category }),
+                            });
+                            if (!res.ok) {
+                              const err = await res.json().catch(() => ({}));
+                              throw new Error(err.error ?? 'Gagal membuat folder');
+                            }
+                            const data = await res.json();
+                            const newFolderId = data.folder?.id;
+                            if (!newFolderId) throw new Error('Folder ID tidak ditemukan');
+                            // Now move the file to the new folder
+                            const moveRes = await fetch('/api/files', {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ id: moveTarget.id, folderId: newFolderId }),
+                            });
+                            if (!moveRes.ok) {
+                              const err = await moveRes.json().catch(() => ({}));
+                              throw new Error(err.error ?? 'Gagal memindahkan file');
+                            }
+                            toast({
+                              title: 'Berhasil',
+                              description: `File dipindahkan ke folder "${cat.category}".`,
+                            });
+                            setMoveDialogOpen(false);
+                            setMoveTarget(null);
+                            onRefresh();
+                          } catch (e) {
+                            toast({
+                              title: 'Gagal',
+                              description: e instanceof Error ? e.message : 'Gagal auto-kategorikan',
+                              variant: 'destructive',
+                            });
+                          } finally {
+                            setMoveLoading(false);
+                          }
+                        }
+                      }}
+                      disabled={moveLoading}
+                    >
+                      <cat.icon className="mr-1 h-3 w-3" />
+                      {cat.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {moveLoading && (
+            <div className="flex items-center justify-center gap-2 pt-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Memindahkan…
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoveDialogOpen(false)}>
+              Batal
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -626,7 +991,7 @@ export function FileBrowser({
 function ListView(props: {
   items: Item[];
   onOpenFolder: (id: string | null) => void;
-  onDownload: (f: FileItem) => void;
+  onDownload: (f: FileItem | string) => void;
   onPreview: (f: FileItem) => void;
   onDelete: (i: Item, permanent?: boolean) => void;
   onRename: (i: Item) => void;
@@ -635,6 +1000,7 @@ function ListView(props: {
   onShare: (f: FileItem) => void;
   onVersion: (f: FileItem) => void;
   onMoveFile: (fileId: string, targetFolderId: string | null) => void;
+  onMoveToFolder: (f: FileItem) => void;
   bulkMode: boolean;
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
@@ -678,6 +1044,7 @@ function Row({
   onShare,
   onVersion,
   onMoveFile,
+  onMoveToFolder,
   bulkMode,
   selectedIds,
   onToggleSelect,
@@ -689,7 +1056,7 @@ function Row({
 }: {
   item: Item;
   onOpenFolder: (id: string | null) => void;
-  onDownload: (f: FileItem) => void;
+  onDownload: (f: FileItem | string) => void;
   onPreview: (f: FileItem) => void;
   onDelete: (i: Item, permanent?: boolean) => void;
   onRename: (i: Item) => void;
@@ -698,6 +1065,7 @@ function Row({
   onShare: (f: FileItem) => void;
   onVersion: (f: FileItem) => void;
   onMoveFile: (fileId: string, targetFolderId: string | null) => void;
+  onMoveToFolder: (f: FileItem) => void;
   bulkMode: boolean;
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
@@ -838,6 +1206,10 @@ function Row({
                     <History className="mr-2 h-4 w-4" />
                     Version History
                   </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onMoveToFolder(item)}>
+                    <FolderInput className="mr-2 h-4 w-4" />
+                    Pindahkan ke Folder
+                  </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => onRename(item)}>
                     <Pencil className="mr-2 h-4 w-4" />
                     Ganti nama
@@ -896,7 +1268,7 @@ function Row({
 function GridView(props: {
   items: Item[];
   onOpenFolder: (id: string | null) => void;
-  onDownload: (f: FileItem) => void;
+  onDownload: (f: FileItem | string) => void;
   onPreview: (f: FileItem) => void;
   onDelete: (i: Item, permanent?: boolean) => void;
   onRename: (i: Item) => void;
@@ -905,6 +1277,7 @@ function GridView(props: {
   onShare: (f: FileItem) => void;
   onVersion: (f: FileItem) => void;
   onMoveFile: (fileId: string, targetFolderId: string | null) => void;
+  onMoveToFolder: (f: FileItem) => void;
   bulkMode: boolean;
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
@@ -1026,6 +1399,10 @@ function GridView(props: {
                       <DropdownMenuItem onClick={() => props.onVersion(item)}>
                         <History className="mr-2 h-4 w-4" />
                         Version History
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => props.onMoveToFolder(item)}>
+                        <FolderInput className="mr-2 h-4 w-4" />
+                        Pindahkan ke Folder
                       </DropdownMenuItem>
                     </>
                   )}
