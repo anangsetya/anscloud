@@ -1,8 +1,13 @@
+// File: src/app/api/auth/google/callback/route.ts
+// REPLACE file lama dengan ini
+
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { db } from '@/lib/db';
 import { isGoogleOAuthConfigured } from '@/lib/google-config';
 import { refreshAccountQuota } from '@/lib/storage';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 
 /**
  * GET /api/auth/google/callback?code=...&state=...
@@ -10,14 +15,12 @@ import { refreshAccountQuota } from '@/lib/storage';
  * Google redirects here after the user grants (or denies) consent.
  *
  * Flow:
+ *   0. Decode state → extract userId (from login route) + returnTo.
  *   1. Exchange `code` for access_token + refresh_token via OAuth2 client.
  *   2. Fetch the user's Google profile (email, name) via oauth2.userinfo.
  *   3. Upsert DriveAccount with provider='google' and the tokens.
  *   4. Fetch the live Drive quota and persist it.
  *   5. Redirect back to the UI (returnTo from state, default "/?view=accounts").
- *
- * If the user denies consent, Google sends `error=access_denied` — we surface
- * that to the UI as a friendly message.
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
@@ -25,15 +28,24 @@ export async function GET(req: NextRequest) {
   const error = searchParams.get('error');
   const stateParam = searchParams.get('state');
 
-  // Parse state to get returnTo (default "/")
+  // Parse state to get userId + returnTo
   let returnTo = '/?view=accounts';
+  let userId: string | null = null;
+
   if (stateParam) {
     try {
       const decoded = JSON.parse(Buffer.from(stateParam, 'base64url').toString('utf-8'));
       if (decoded.returnTo) returnTo = decoded.returnTo;
+      if (decoded.userId) userId = decoded.userId;
     } catch {
-      // ignore malformed state, use default
+      // ignore malformed state
     }
+  }
+
+  // Fallback: try to get userId from session if not in state
+  if (!userId) {
+    const session = await getServerSession(authOptions);
+    userId = session?.user?.id || null;
   }
 
   // Handle user-denied consent
@@ -46,6 +58,12 @@ export async function GET(req: NextRequest) {
   if (!code) {
     return NextResponse.redirect(
       new URL('/?oauth_error=missing_code&view=accounts', req.nextUrl.origin)
+    );
+  }
+
+  if (!userId) {
+    return NextResponse.redirect(
+      new URL('/?oauth_error=no_user_session&view=accounts', req.nextUrl.origin)
     );
   }
 
@@ -107,14 +125,15 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // 3. Upsert DriveAccount with provider='google'
-  const existing = await db.driveAccount.findUnique({ where: { email } });
+  // 3. Upsert DriveAccount — use findFirst with compound userId+email
+  const existing = await db.driveAccount.findFirst({
+    where: { userId, email },
+  });
 
-  // Assign a deterministic color based on email hash so the same account
-  // always gets the same color across reconnects.
   const color = pickColorForEmail(email);
 
   const data = {
+    userId,
     email,
     displayName,
     avatarColor: color,
@@ -126,40 +145,38 @@ export async function GET(req: NextRequest) {
 
   let account;
   if (existing) {
-    // Re-connect: update tokens but keep existing files & folder assignment.
     account = await db.driveAccount.update({ where: { id: existing.id }, data });
   } else {
-    // New connection: create with default 15 GB quota placeholder; will be
-    // overwritten with the real quota from Drive API in the next step.
     account = await db.driveAccount.create({
       data: { ...data, totalBytes: 15n * 1024n * 1024n * 1024n },
     });
   }
 
-  // 4. Fetch the live Drive quota and persist it (best-effort — if this fails
-  // we still redirect with success, the UI will show the placeholder quota).
+  // 4. Fetch the live Drive quota and persist it (best-effort)
   try {
     await refreshAccountQuota(account.id);
   } catch (err) {
     console.warn('[google-callback] Failed to fetch quota:', err);
-    // non-fatal
   }
 
   // 5. Redirect back to the UI
-  const successUrl = new URL(`/?oauth_success=connected&email=${encodeURIComponent(email)}&view=accounts`, req.nextUrl.origin);
+  const successUrl = new URL(
+    `/?oauth_success=connected&email=${encodeURIComponent(email)}&view=accounts`,
+    req.nextUrl.origin
+  );
   return NextResponse.redirect(successUrl);
 }
 
 const COLORS = [
-  '#10b981', '#f59e0b', '#8b5cf6', '#ef4444',
-  '#3b82f6', '#ec4899', '#14b8a6', '#f97316',
+  '#6366f1', '#8b5cf6', '#a78bfa', '#f59e0b',
+  '#ef4444', '#ec4899', '#14b8a6', '#f97316',
 ];
 
 function pickColorForEmail(email: string): string {
   let hash = 0;
   for (let i = 0; i < email.length; i++) {
     hash = ((hash << 5) - hash) + email.charCodeAt(i);
-    hash |= 0; // convert to 32-bit int
+    hash |= 0;
   }
   return COLORS[Math.abs(hash) % COLORS.length];
 }

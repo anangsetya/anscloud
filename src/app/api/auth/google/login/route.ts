@@ -1,5 +1,10 @@
+// File: src/app/api/auth/google/login/route.ts
+// REPLACE file lama dengan ini
+
 import { NextRequest, NextResponse } from 'next/server';
 import { getGoogleAuthUrl, isGoogleOAuthConfigured } from '@/lib/google-config';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 
 /**
  * GET /api/auth/google/login
@@ -19,6 +24,12 @@ import { getGoogleAuthUrl, isGoogleOAuthConfigured } from '@/lib/google-config';
  * returns 400 with a helpful error message.
  */
 export async function GET(req: NextRequest) {
+  // Must be logged in to connect a Google account
+  const session = await getServerSession(authOptions);
+   if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized — silakan login dulu' }, { status: 401 });
+  }
+
   if (!isGoogleOAuthConfigured()) {
     return NextResponse.json(
       {
@@ -30,15 +41,15 @@ export async function GET(req: NextRequest) {
   }
 
   // Compute redirect URI based on the request origin (or ANSCLOUD_PUBLIC_URL override).
-  // This makes OAuth work both in dev (http://localhost:3000) and in prod
-  // (https://drive.yourdomain.com) without code changes.
   const publicUrl =
     process.env.ANSCLOUD_PUBLIC_URL ||
     `${req.nextUrl.protocol}//${req.nextUrl.host}`;
   const redirectUri = `${publicUrl}/api/auth/google/callback`;
 
   const returnTo = req.nextUrl.searchParams.get('returnTo') || '/';
-  const state = Buffer.from(JSON.stringify({ returnTo })).toString('base64url');
+  const state = Buffer.from(
+    JSON.stringify({ returnTo, userId: session.user.id })
+  ).toString('base64url');
 
   const authUrl = getGoogleAuthUrl(redirectUri, state);
   return NextResponse.redirect(authUrl);
