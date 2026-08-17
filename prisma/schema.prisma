@@ -32,8 +32,8 @@ model User {
 }
 
 /// A connected Google Drive account.
-/// - provider='local'   → demo mode, files stored on local filesystem, simulated quota
-/// - provider='google'  → real Google Drive via OAuth2
+/// - provider='local'   -> demo mode, files stored on local filesystem, simulated quota
+/// - provider='google'  -> real Google Drive via OAuth2
 model DriveAccount {
   id            String   @id @default(cuid())
   userId        String
@@ -94,6 +94,9 @@ model VirtualFile {
   currentVersion  Int      @default(1)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  /// Full folder path from Google Drive (e.g. "Photos/Vacation/2024")
+  /// Only populated for files synced from Google Drive.
+  drivePath       String?
 
   user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   driveAccount    DriveAccount   @relation(fields: [driveAccountId], references: [id], onDelete: Cascade)

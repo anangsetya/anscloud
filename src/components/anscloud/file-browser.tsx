@@ -21,21 +21,13 @@ import {
   FileArchive,
   Loader2,
   ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  FolderInput,
-  FileText,
-  Table as TableIcon,
-  Image as ImageIcon,
-  Video,
-  Music,
-  FileQuestion,
+  FolderSync,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Dialog,
   DialogContent,
@@ -50,7 +42,6 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { FileIcon, FolderIcon } from './file-icon';
@@ -60,12 +51,22 @@ import { VersionHistoryDialog } from './version-history-dialog';
 import { cn } from '@/lib/utils';
 import { getFileIcon } from '@/lib/file-utils';
 
+// ─── Types ────────────────────────────────────────────────────────
+
 interface FolderItem {
   id: string;
   name: string;
   type: 'folder';
   createdAt: string;
+  drivePath?: string;
 }
+
+interface DriveFolderItem {
+  name: string;
+  path: string;
+  count: number;
+}
+
 interface FileItem {
   id: string;
   name: string;
@@ -82,12 +83,14 @@ interface FileItem {
   isStarred?: boolean;
   deletedAt?: string;
   folderName?: string | null;
+  drivePath?: string | null;
   type: 'file';
 }
+
 type Item = FolderItem | FileItem;
 
-type SortKey = 'name' | 'size' | 'date' | 'type' | 'location';
-type SortOrder = 'asc' | 'desc';
+type SortField = 'name' | 'size' | 'modified' | 'type' | 'location';
+type SortDir = 'asc' | 'desc';
 
 interface FileBrowserProps {
   refreshKey: number;
@@ -98,18 +101,7 @@ interface FileBrowserProps {
   filter?: 'recent' | 'starred' | 'trash' | null;
 }
 
-/** Simple client-side categorizer (mirrors server-side categorizeFile logic) */
-function clientCategorizeFile(mimeType: string, filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
-  const mime = (mimeType || '').toLowerCase();
-  if (mime.startsWith('image/') || ['jpg','jpeg','png','gif','webp','bmp','svg','tiff','tif','ico','heic','heif','raw','psd','ai'].includes(ext)) return 'Images';
-  if (mime === 'application/pdf' || ext === 'pdf') return 'PDF';
-  if (mime.includes('word') || mime.includes('officedocument.wordprocessingml') || ['doc','docx','odt','rtf'].includes(ext)) return 'Word';
-  if (mime.includes('excel') || mime.includes('spreadsheet') || mime.includes('officedocument.spreadsheetml') || ['xls','xlsx','ods','csv','tsv'].includes(ext)) return 'Excel';
-  if (mime.startsWith('video/') || ['mp4','avi','mov','wmv','flv','webm','mkv','m4v','mpg','mpeg','3gp'].includes(ext)) return 'Video';
-  if (mime.startsWith('audio/') || ['mp3','wav','flac','aac','ogg','wma','m4a','opus','aiff'].includes(ext)) return 'Audio';
-  return 'Others';
-}
+// ─── Component ────────────────────────────────────────────────────
 
 export function FileBrowser({
   refreshKey,
@@ -123,6 +115,7 @@ export function FileBrowser({
     { id: null, name: 'My AnsCloud' },
   ]);
   const [items, setItems] = useState<Item[]>([]);
+  const [driveFolders, setDriveFolders] = useState<DriveFolderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [renameTarget, setRenameTarget] = useState<Item | null>(null);
@@ -136,182 +129,39 @@ export function FileBrowser({
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
   const [draggingFileId, setDraggingFileId] = useState<string | null>(null);
 
-  // ── Sorting state ───────────────────────────────────────────
-  const [sortBy, setSortBy] = useState<SortKey>('name');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
+  // Sorting
+  const [sortBy, setSortBy] = useState<SortField>('name');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
 
-  // ── Move-to-folder dialog state ─────────────────────────────
-  const [moveTarget, setMoveTarget] = useState<FileItem | null>(null);
+  // Drive folder navigation
+  const [currentDrivePath, setCurrentDrivePath] = useState<string | null>(null);
+  const [drivePathBreadcrumb, setDrivePathBreadcrumb] = useState<string[]>([]);
+
+  // Move dialog
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
-  const [moveFolders, setMoveFolders] = useState<Array<{ id: string; name: string; path?: string }>>([]);
-  const [moveLoading, setMoveLoading] = useState(false);
-  const [moveFetchLoading, setMoveFetchLoading] = useState(false);
+  const [moveTargetAccount, setMoveTargetAccount] = useState('');
+  const [moveDrivePath, setMoveDrivePath] = useState('');
+  const [moveAutoGroup, setMoveAutoGroup] = useState(false);
+  const [moveAccounts, setMoveAccounts] = useState<Array<{ id: string; email: string; provider: string }>>([]);
+  const [moveDriveFolders, setMoveDriveFolders] = useState<string[]>([]);
+  const [moving, setMoving] = useState(false);
 
   const { toast } = useToast();
 
-  // ── Sorting logic ───────────────────────────────────────────
-  function handleSort(key: SortKey) {
-    if (sortBy === key) {
-      setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortBy(key);
-      setSortOrder('asc');
-    }
-  }
-
-  const sortedItems = useMemo(() => {
-    const folders = items.filter((i) => i.type === 'folder');
-    const files = items.filter((i) => i.type === 'file');
-
-    // Folders always sorted by name only.
-    folders.sort((a, b) => a.name.localeCompare(b.name, 'id-ID'));
-
-    // Sort files by the selected key.
-    const dir = sortOrder === 'asc' ? 1 : -1;
-    files.sort((a, b) => {
-      let cmp = 0;
-      switch (sortBy) {
-        case 'name':
-          cmp = a.name.localeCompare(b.name, 'id-ID');
-          break;
-        case 'size': {
-          const sa = Number(a.sizeBytes) || 0;
-          const sb = Number(b.sizeBytes) || 0;
-          cmp = sa - sb;
-          break;
-        }
-        case 'date':
-          cmp = (a.createdAt ?? '').localeCompare(b.createdAt ?? '');
-          break;
-        case 'type':
-          cmp = a.mimeType.localeCompare(b.mimeType);
-          break;
-        case 'location':
-          cmp = a.driveAccountEmail.localeCompare(b.driveAccountEmail);
-          break;
-      }
-      return cmp * dir;
-    });
-
-    return [...folders, ...files];
-  }, [items, sortBy, sortOrder]);
-
-  const sortLabels: Record<SortKey, string> = {
-    name: 'Nama',
-    size: 'Ukuran',
-    date: 'Terakhir diubah',
-    type: 'Jenis file',
-    location: 'Lokasi',
-  };
-
-  // ── Move-to-folder helpers ──────────────────────────────────
-  async function fetchAllFolders() {
-    setMoveFetchLoading(true);
-    try {
-      const res = await fetch('/api/folders');
-      if (!res.ok) throw new Error('Gagal mengambil daftar folder');
-      const data = await res.json();
-      const fetched: Array<{ id: string; name: string }> = data.folders ?? [];
-      setMoveFolders(fetched);
-    } catch (e) {
-      toast({
-        title: 'Gagal',
-        description: e instanceof Error ? e.message : 'Gagal mengambil folder',
-        variant: 'destructive',
-      });
-    } finally {
-      setMoveFetchLoading(false);
-    }
-  }
-
-  function openMoveDialog(file: FileItem) {
-    setMoveTarget(file);
-    setMoveDialogOpen(true);
-    fetchAllFolders();
-  }
-
-  async function handleMoveToFolder(folderId: string | null) {
-    if (!moveTarget) return;
-    setMoveLoading(true);
-    try {
-      const res = await fetch('/api/files', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: moveTarget.id, folderId }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? 'Gagal memindahkan file');
-      }
-      toast({ title: 'Berhasil', description: 'File dipindahkan ke folder.' });
-      setMoveDialogOpen(false);
-      setMoveTarget(null);
-      onRefresh();
-    } catch (e) {
-      toast({
-        title: 'Gagal memindahkan',
-        description: e instanceof Error ? e.message : 'Unknown error',
-        variant: 'destructive',
-      });
-    } finally {
-      setMoveLoading(false);
-    }
-  }
-
-  async function handleAutoCategorize() {
-    if (!moveTarget) return;
-    const categoryName = clientCategorizeFile(moveTarget.mimeType, moveTarget.name);
-
-    // Find or create the category folder.
-    // First check if it already exists among fetched folders.
-    const existing = moveFolders.find((f) => f.name === categoryName);
-    if (existing) {
-      await handleMoveToFolder(existing.id);
-      return;
-    }
-
-    // Create the folder, then move.
-    setMoveLoading(true);
-    try {
-      const res = await fetch('/api/folders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: categoryName }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? 'Gagal membuat folder');
-      }
-      const data = await res.json();
-      const newFolderId = data.folder?.id;
-      if (!newFolderId) throw new Error('Folder ID tidak ditemukan');
-      toast({ title: 'Berhasil', description: `File dipindahkan ke folder "${categoryName}".` });
-      setMoveDialogOpen(false);
-      setMoveTarget(null);
-      onRefresh();
-    } catch (e) {
-      toast({
-        title: 'Gagal',
-        description: e instanceof Error ? e.message : 'Gagal auto-kategorikan',
-        variant: 'destructive',
-      });
-    } finally {
-      setMoveLoading(false);
-    }
-  }
-
-  // ── Data loading ────────────────────────────────────────────
+  // ─── Load files ───────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true);
     setSelectedIds(new Set());
     try {
       let url: string;
       if (search.trim()) {
-        url = `/api/files?search=${encodeURIComponent(search.trim())}`;
+        url = `/api/files?search=${encodeURIComponent(search.trim())}&sort=${sortBy}:${sortDir}`;
       } else if (filter) {
-        url = `/api/files?filter=${filter}`;
+        url = `/api/files?filter=${filter}&sort=${sortBy}:${sortDir}`;
+      } else if (currentDrivePath) {
+        url = `/api/files?drivePath=${encodeURIComponent(currentDrivePath)}&sort=${sortBy}:${sortDir}`;
       } else {
-        url = `/api/files?folderId=${currentFolderId ?? ''}`;
+        url = `/api/files?folderId=${currentFolderId ?? ''}&sort=${sortBy}:${sortDir}`;
       }
       const res = await fetch(url);
       if (!res.ok) throw new Error('Gagal memuat data');
@@ -328,11 +178,25 @@ export function FileBrowser({
           setBreadcrumb([{ id: null, name: `Hasil pencarian: "${search.trim()}"` }]);
         }
         setItems(data.files ?? []);
+        setDriveFolders([]);
+      } else if (currentDrivePath) {
+        // Drive path navigation
+        const segments = currentDrivePath.split('/');
+        setDrivePathBreadcrumb(segments);
+        setBreadcrumb([
+          { id: null, name: 'My AnsCloud' },
+          ...segments.map((s, i) => ({ id: `drive:${segments.slice(0, i + 1).join('/')}`, name: s })),
+        ]);
+        const folders: FolderItem[] = (data.folders ?? []).map((f: FolderItem) => ({ ...f }));
+        const files: FileItem[] = (data.files ?? []).map((f: FileItem) => ({ ...f }));
+        setItems([...folders, ...files]);
+        setDriveFolders([]);
       } else {
         setBreadcrumb(data.breadcrumb ?? [{ id: null, name: 'My AnsCloud' }]);
         const folders: FolderItem[] = (data.folders ?? []).map((f: FolderItem) => ({ ...f }));
         const files: FileItem[] = (data.files ?? []).map((f: FileItem) => ({ ...f }));
         setItems([...folders, ...files]);
+        setDriveFolders(data.driveFolders ?? []);
       }
     } catch (e) {
       toast({
@@ -343,20 +207,36 @@ export function FileBrowser({
     } finally {
       setLoading(false);
     }
-  }, [currentFolderId, search, filter, toast]);
+  }, [currentFolderId, search, filter, sortBy, sortDir, currentDrivePath, toast]);
 
   useEffect(() => {
     load();
   }, [load, refreshKey]);
 
+  // Reset drive path when folder changes
+  useEffect(() => {
+    setCurrentDrivePath(null);
+    setDrivePathBreadcrumb([]);
+  }, [currentFolderId]);
+
+  // ─── Handlers ────────────────────────────────────────────────
+
   function handleOpenFolder(folderId: string | null) {
+    // Check if it's a Drive folder (id starts with "drive:")
+    if (folderId && folderId.startsWith('drive:')) {
+      const path = folderId.slice(6);
+      setCurrentDrivePath(path);
+      return;
+    }
     onFolderChange(folderId);
   }
 
-  // ── FIXED: handleDownload accepts string | FileItem ─────────
-  function handleDownload(fileOrId: FileItem | string) {
-    const id = typeof fileOrId === 'string' ? fileOrId : fileOrId.id;
-    window.open(`/api/download?id=${encodeURIComponent(id)}`, '_blank');
+  function handleNavigateDrivePath(path: string | null) {
+    setCurrentDrivePath(path);
+  }
+
+  function handleDownload(file: FileItem) {
+    window.open(`/api/download?id=${encodeURIComponent(file.id)}`, '_blank');
   }
 
   function handlePreview(file: FileItem) {
@@ -472,7 +352,6 @@ export function FileBrowser({
     }
   }
 
-  /** Download multiple files as a single ZIP archive. */
   async function handleDownloadZip() {
     if (selectedIds.size === 0) return;
     setZipping(true);
@@ -513,7 +392,6 @@ export function FileBrowser({
     }
   }
 
-  /** Move a file to a different folder via drag-and-drop. */
   async function handleMoveFile(fileId: string, targetFolderId: string | null) {
     try {
       const res = await fetch('/api/files', {
@@ -535,6 +413,101 @@ export function FileBrowser({
       });
     }
   }
+
+  // ─── Move to Drive dialog ────────────────────────────────────
+
+  async function openMoveDialog() {
+    if (selectedIds.size === 0) return;
+    // Fetch accounts
+    try {
+      const res = await fetch('/api/accounts');
+      if (!res.ok) throw new Error('Gagal memuat akun');
+      const data = await res.json();
+      setMoveAccounts(data.accounts ?? []);
+
+      // Fetch unique drive paths for folder selection
+      const filesRes = await fetch('/api/files?folderId=&sort=name:asc');
+      if (filesRes.ok) {
+        const filesData = await filesRes.json();
+        const paths = new Set<string>();
+        for (const f of filesData.files ?? []) {
+          if (f.drivePath) paths.add(f.drivePath.split('/')[0]);
+        }
+        setMoveDriveFolders(Array.from(paths).sort());
+      }
+
+      setMoveDialogOpen(true);
+      setMoveTargetAccount('');
+      setMoveDrivePath('');
+      setMoveAutoGroup(false);
+    } catch (e) {
+      toast({
+        title: 'Gagal',
+        description: e instanceof Error ? e.message : 'Gagal memuat data akun',
+        variant: 'destructive',
+      });
+    }
+  }
+
+  async function executeMoveToDrive() {
+    if (!moveTargetAccount || selectedIds.size === 0) return;
+    setMoving(true);
+    try {
+      const res = await fetch('/api/files/move-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileIds: Array.from(selectedIds),
+          targetAccountId: moveTargetAccount,
+          targetDrivePath: moveAutoGroup ? undefined : (moveDrivePath || undefined),
+          autoGroup: moveAutoGroup,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? 'Gagal memindahkan');
+      }
+      const data = await res.json();
+      toast({
+        title: 'Berhasil dipindahkan',
+        description: data.message,
+      });
+      setMoveDialogOpen(false);
+      setBulkMode(false);
+      setSelectedIds(new Set());
+      onRefresh();
+    } catch (e) {
+      toast({
+        title: 'Gagal memindahkan',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setMoving(false);
+    }
+  }
+
+  // ─── Sort helpers ────────────────────────────────────────────
+
+  function toggleSort(field: SortField) {
+    if (sortBy === field) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(field);
+      setSortDir('asc');
+    }
+  }
+
+  const sortLabel = useMemo(() => {
+    const labels: Record<SortField, string> = {
+      name: 'Nama',
+      size: 'Ukuran',
+      modified: 'Terakhir Ubah',
+      type: 'Jenis File',
+      location: 'Lokasi',
+    };
+    return `${labels[sortBy]} ${sortDir === 'asc' ? '↑' : '↓'}`;
+  }, [sortBy, sortDir]);
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -577,7 +550,7 @@ export function FileBrowser({
     }
   }
 
-  // Update previewFile object when items refresh (so star toggle reflects in dialog too)
+  // Update previewFile object when items refresh
   useEffect(() => {
     if (previewFile) {
       const updated = items.find((i) => i.id === previewFile.id && i.type === 'file') as FileItem | undefined;
@@ -588,16 +561,21 @@ export function FileBrowser({
   }, [items, previewFile]);
 
   const isTrash = filter === 'trash';
-  const isSpecial = filter !== null || !!search.trim();
+  const isSpecial = filter !== null || !!search.trim() || !!currentDrivePath;
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      {/* Breadcrumb & view controls */}
-      <div className="flex items-center gap-1 border-b px-6 py-3 text-sm">
+      {/* Breadcrumb, sort, and view controls */}
+      <div className="flex flex-wrap items-center gap-1 border-b px-4 py-3 text-sm">
         <button
           onClick={() => {
-            onFolderChange(null);
-            setBreadcrumb([{ id: null, name: 'My AnsCloud' }]);
+            if (currentDrivePath) {
+              // Go back to root drive view
+              setCurrentDrivePath(null);
+              setDrivePathBreadcrumb([]);
+            } else {
+              onFolderChange(null);
+            }
           }}
           className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
         >
@@ -608,60 +586,70 @@ export function FileBrowser({
           <div key={`${b.id ?? 'root'}-${idx}`} className="flex items-center gap-1">
             <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
             <button
-              onClick={() => onFolderChange(b.id)}
+              onClick={() => {
+                if (b.id && b.id.startsWith('drive:')) {
+                  const path = b.id.slice(6);
+                  // Navigate to this drive path level
+                  const segments = path.split('/');
+                  setCurrentDrivePath(segments.join('/'));
+                } else {
+                  onFolderChange(b.id);
+                }
+              }}
               className="text-muted-foreground hover:text-foreground"
             >
               {b.name}
             </button>
           </div>
         ))}
-        {breadcrumb.length === 1 && (
+        {breadcrumb.length === 1 && !currentDrivePath && (
           <span className="ml-1 font-medium">{breadcrumb[0].name}</span>
         )}
 
         <div className="ml-auto flex items-center gap-1">
-          {!isSpecial && (
-            <Button
-              variant={bulkMode ? 'default' : 'ghost'}
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => {
-                setBulkMode(!bulkMode);
-                setSelectedIds(new Set());
-              }}
-              title={bulkMode ? 'Keluar mode pilih' : 'Mode pilih banyak'}
-            >
-              {bulkMode ? <X className="h-4 w-4" /> : <CheckSquare className="h-4 w-4" />}
-            </Button>
-          )}
-
-          {/* Sort dropdown button */}
+          {/* Sort controls */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" title="Urutkan">
-                <ArrowUpDown className="h-4 w-4" />
+              <Button variant="outline" size="sm" className="h-8 gap-1 text-xs">
+                <ArrowUpDown className="h-3.5 w-3.5" />
+                {sortLabel}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Urutkan berdasarkan</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {(['name', 'size', 'date', 'type', 'location'] as SortKey[]).map((key) => (
-                <DropdownMenuItem
-                  key={key}
-                  onClick={() => handleSort(key)}
-                  className="flex items-center justify-between gap-4"
-                >
-                  <span>{sortLabels[key]}</span>
-                  {sortBy === key && (
-                    sortOrder === 'asc'
-                      ? <ArrowUp className="h-3.5 w-3.5 text-emerald-600" />
-                      : <ArrowDown className="h-3.5 w-3.5 text-emerald-600" />
-                  )}
-                </DropdownMenuItem>
-              ))}
+              <DropdownMenuItem onClick={() => toggleSort('name')}>
+                Nama {sortBy === 'name' && (sortDir === 'asc' ? '↑' : '↓')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => toggleSort('size')}>
+                Ukuran {sortBy === 'size' && (sortDir === 'asc' ? '↑' : '↓')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => toggleSort('modified')}>
+                Terakhir Ubah {sortBy === 'modified' && (sortDir === 'asc' ? '↑' : '↓')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => toggleSort('type')}>
+                Jenis File {sortBy === 'type' && (sortDir === 'asc' ? '↑' : '↓')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => toggleSort('location')}>
+                Lokasi (Drive) {sortBy === 'location' && (sortDir === 'asc' ? '↑' : '↓')}
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
+          {!isSpecial && (
+            <>
+              <Button
+                variant={bulkMode ? 'default' : 'ghost'}
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => {
+                  setBulkMode(!bulkMode);
+                  setSelectedIds(new Set());
+                }}
+                title={bulkMode ? 'Keluar mode pilih' : 'Mode pilih banyak'}
+              >
+                {bulkMode ? <X className="h-4 w-4" /> : <CheckSquare className="h-4 w-4" />}
+              </Button>
+            </>
+          )}
           <Button
             variant={viewMode === 'list' ? 'default' : 'ghost'}
             size="icon"
@@ -683,6 +671,30 @@ export function FileBrowser({
         </div>
       </div>
 
+      {/* Drive folder chips (only at root, no AnsCloud folder selected) */}
+      {!isSpecial && !currentFolderId && driveFolders.length > 0 && (
+        <div className="flex flex-wrap gap-2 border-b px-6 py-3 bg-muted/20">
+          <FolderSync className="h-4 w-4 mt-0.5 text-muted-foreground" />
+          <span className="text-xs font-medium text-muted-foreground self-center mr-1">Folder Drive:</span>
+          {driveFolders.map((df) => (
+            <button
+              key={df.path}
+              onClick={() => handleNavigateDrivePath(df.path)}
+              className={cn(
+                'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                currentDrivePath === df.path
+                  ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
+                  : 'border-border bg-background hover:bg-muted'
+              )}
+            >
+              <FolderIcon className="h-3.5 w-3.5" />
+              {df.name}
+              <span className="text-[10px] text-muted-foreground">({df.count})</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Bulk action toolbar */}
       {bulkMode && selectedIds.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 border-b bg-emerald-50 px-6 py-2 dark:bg-emerald-950/30">
@@ -693,10 +705,6 @@ export function FileBrowser({
                 <Button size="sm" variant="outline" onClick={() => handleBulkAction('star')}>
                   <Star className="mr-1 h-3.5 w-3.5" />
                   Star
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => handleBulkAction('unstar')}>
-                  <Star className="mr-1 h-3.5 w-3.5" />
-                  Unstar
                 </Button>
                 <Button
                   size="sm"
@@ -709,7 +717,11 @@ export function FileBrowser({
                   ) : (
                     <FileArchive className="mr-1 h-3.5 w-3.5" />
                   )}
-                  {zipping ? 'Menyiapkan…' : 'Download ZIP'}
+                  {zipping ? 'Menyiapkan...' : 'Download ZIP'}
+                </Button>
+                <Button size="sm" variant="outline" onClick={openMoveDialog}>
+                  <ArrowRightLeft className="mr-1 h-3.5 w-3.5" />
+                  Pindah ke Drive
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => handleBulkAction('delete')}>
                   <Trash2 className="mr-1 h-3.5 w-3.5" />
@@ -737,13 +749,13 @@ export function FileBrowser({
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {loading ? (
           <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-            Memuat…
+            Memuat...
           </div>
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && driveFolders.length === 0 ? (
           <EmptyState filter={filter} search={search} />
         ) : viewMode === 'list' ? (
           <ListView
-            items={sortedItems}
+            items={items}
             onOpenFolder={handleOpenFolder}
             onDownload={handleDownload}
             onPreview={handlePreview}
@@ -754,7 +766,6 @@ export function FileBrowser({
             onShare={(f) => setShareTarget({ id: f.id, name: f.name })}
             onVersion={(f) => setVersionTarget({ id: f.id, name: f.name })}
             onMoveFile={handleMoveFile}
-            onMoveToFolder={openMoveDialog}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={toggleSelect}
@@ -763,10 +774,13 @@ export function FileBrowser({
             onDragOverFolder={setDragOverFolderId}
             onDragStartFile={setDraggingFileId}
             draggingFileId={draggingFileId}
+            sortBy={sortBy}
+            sortDir={sortDir}
+            onSort={toggleSort}
           />
         ) : (
           <GridView
-            items={sortedItems}
+            items={items}
             onOpenFolder={handleOpenFolder}
             onDownload={handleDownload}
             onPreview={handlePreview}
@@ -777,7 +791,6 @@ export function FileBrowser({
             onShare={(f) => setShareTarget({ id: f.id, name: f.name })}
             onVersion={(f) => setVersionTarget({ id: f.id, name: f.name })}
             onMoveFile={handleMoveFile}
-            onMoveToFolder={openMoveDialog}
             bulkMode={bulkMode}
             selectedIds={selectedIds}
             onToggleSelect={toggleSelect}
@@ -812,10 +825,94 @@ export function FileBrowser({
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRenameTarget(null)}>
-              Batal
-            </Button>
+            <Button variant="outline" onClick={() => setRenameTarget(null)}>Batal</Button>
             <Button onClick={confirmRename}>Simpan</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Move to Drive dialog */}
+      <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Pindah ke Drive Lain</DialogTitle>
+            <DialogDescription>
+              Pindahkan {selectedIds.size} file ke akun Drive lain.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* Target account */}
+            <div className="space-y-2">
+              <Label>Akun Tujuan</Label>
+              <select
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                value={moveTargetAccount}
+                onChange={(e) => setMoveTargetAccount(e.target.value)}
+              >
+                <option value="">-- Pilih akun Drive --</option>
+                {moveAccounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.email} {acc.provider === 'google' ? '(Google Drive)' : '(Local)'}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Auto-group toggle */}
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="auto-group"
+                checked={moveAutoGroup}
+                onChange={(e) => setMoveAutoGroup(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              <Label htmlFor="auto-group" className="cursor-pointer">
+                Otomatis kelompokkan berdasarkan jenis (Gambar, Video, Dokumen, dll)
+              </Label>
+            </div>
+
+            {/* Manual folder selection (only if not auto-group) */}
+            {!moveAutoGroup && (
+              <div className="space-y-2">
+                <Label>Folder Tujuan (opsional)</Label>
+                <Input
+                  placeholder="Contoh: Photos/2024"
+                  value={moveDrivePath}
+                  onChange={(e) => setMoveDrivePath(e.target.value)}
+                />
+                {moveDriveFolders.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    <span className="text-xs text-muted-foreground">Tersedia:</span>
+                    {moveDriveFolders.map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => setMoveDrivePath(p)}
+                        className="rounded border px-2 py-0.5 text-xs hover:bg-muted"
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoveDialogOpen(false)}>Batal</Button>
+            <Button
+              onClick={executeMoveToDrive}
+              disabled={!moveTargetAccount || moving}
+            >
+              {moving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Memindahkan...
+                </>
+              ) : (
+                'Pindahkan'
+              )}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -843,155 +940,47 @@ export function FileBrowser({
         onOpenChange={(o) => !o && setVersionTarget(null)}
         onRestored={onRefresh}
       />
-
-      {/* Move-to-folder dialog */}
-      <Dialog open={moveDialogOpen} onOpenChange={(o) => !o && setMoveDialogOpen(false)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Pindahkan ke Folder</DialogTitle>
-            <DialogDescription>
-              Pilih folder tujuan untuk &ldquo;{moveTarget?.name ?? ''}&rdquo;.
-            </DialogDescription>
-          </DialogHeader>
-
-          {moveFetchLoading ? (
-            <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Memuat folder…
-            </div>
-          ) : (
-            <div className="max-h-64 space-y-3 overflow-y-auto">
-              {/* Root option */}
-              <button
-                className="flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
-                onClick={() => handleMoveToFolder(null)}
-                disabled={moveLoading}
-              >
-                <Home className="h-4 w-4 text-muted-foreground" />
-                <span>Root (tidak di folder)</span>
-              </button>
-
-              {/* Folder list */}
-              {moveFolders.map((folder) => (
-                <button
-                  key={folder.id}
-                  className="flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
-                  onClick={() => handleMoveToFolder(folder.id)}
-                  disabled={moveLoading}
-                >
-                  <FolderIcon className="h-4 w-4 text-amber-500" />
-                  <span className="truncate">{folder.name}</span>
-                </button>
-              ))}
-
-              {moveFolders.length === 0 && (
-                <p className="text-center text-sm text-muted-foreground py-4">
-                  Belum ada folder.
-                </p>
-              )}
-
-              {/* Auto categorize section */}
-              <div className="border-t pt-3 mt-3">
-                <p className="text-xs font-medium text-muted-foreground mb-2">Auto kategorikan</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {[
-                    { label: 'PDF', icon: FileText, category: 'PDF' },
-                    { label: 'Word', icon: FileText, category: 'Word' },
-                    { label: 'Excel', icon: TableIcon, category: 'Excel' },
-                    { label: 'Images', icon: ImageIcon, category: 'Images' },
-                    { label: 'Video', icon: Video, category: 'Video' },
-                    { label: 'Audio', icon: Music, category: 'Audio' },
-                    { label: 'Others', icon: FileQuestion, category: 'Others' },
-                  ].map((cat) => (
-                    <Button
-                      key={cat.category}
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={async () => {
-                        // Set the target category on moveTarget's internal state
-                        // so handleAutoCategorize uses it
-                        if (!moveTarget) return;
-                        const existing = moveFolders.find((f) => f.name === cat.category);
-                        if (existing) {
-                          await handleMoveToFolder(existing.id);
-                        } else {
-                          // Create folder then move
-                          setMoveLoading(true);
-                          try {
-                            const res = await fetch('/api/folders', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ name: cat.category }),
-                            });
-                            if (!res.ok) {
-                              const err = await res.json().catch(() => ({}));
-                              throw new Error(err.error ?? 'Gagal membuat folder');
-                            }
-                            const data = await res.json();
-                            const newFolderId = data.folder?.id;
-                            if (!newFolderId) throw new Error('Folder ID tidak ditemukan');
-                            // Now move the file to the new folder
-                            const moveRes = await fetch('/api/files', {
-                              method: 'PATCH',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ id: moveTarget.id, folderId: newFolderId }),
-                            });
-                            if (!moveRes.ok) {
-                              const err = await moveRes.json().catch(() => ({}));
-                              throw new Error(err.error ?? 'Gagal memindahkan file');
-                            }
-                            toast({
-                              title: 'Berhasil',
-                              description: `File dipindahkan ke folder "${cat.category}".`,
-                            });
-                            setMoveDialogOpen(false);
-                            setMoveTarget(null);
-                            onRefresh();
-                          } catch (e) {
-                            toast({
-                              title: 'Gagal',
-                              description: e instanceof Error ? e.message : 'Gagal auto-kategorikan',
-                              variant: 'destructive',
-                            });
-                          } finally {
-                            setMoveLoading(false);
-                          }
-                        }
-                      }}
-                      disabled={moveLoading}
-                    >
-                      <cat.icon className="mr-1 h-3 w-3" />
-                      {cat.label}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {moveLoading && (
-            <div className="flex items-center justify-center gap-2 pt-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Memindahkan…
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMoveDialogOpen(false)}>
-              Batal
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
+  );
+}
+
+// ─── List View ───────────────────────────────────────────────────
+
+function SortableHeader({
+  label,
+  field,
+  sortBy,
+  sortDir,
+  onSort,
+  className,
+}: {
+  label: string;
+  field: SortField;
+  sortBy: SortField;
+  sortDir: SortDir;
+  onSort: (f: SortField) => void;
+  className?: string;
+}) {
+  const active = sortBy === field;
+  return (
+    <button
+      onClick={() => onSort(field)}
+      className={cn(
+        'flex items-center gap-1 text-left transition-colors hover:text-foreground',
+        active ? 'text-foreground font-semibold' : 'text-muted-foreground',
+        className
+      )}
+    >
+      {label}
+      {active && <ArrowUpDown className="h-3 w-3" />}
+    </button>
   );
 }
 
 function ListView(props: {
   items: Item[];
   onOpenFolder: (id: string | null) => void;
-  onDownload: (f: FileItem | string) => void;
+  onDownload: (f: FileItem) => void;
   onPreview: (f: FileItem) => void;
   onDelete: (i: Item, permanent?: boolean) => void;
   onRename: (i: Item) => void;
@@ -1000,7 +989,6 @@ function ListView(props: {
   onShare: (f: FileItem) => void;
   onVersion: (f: FileItem) => void;
   onMoveFile: (fileId: string, targetFolderId: string | null) => void;
-  onMoveToFolder: (f: FileItem) => void;
   bulkMode: boolean;
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
@@ -1009,18 +997,23 @@ function ListView(props: {
   onDragOverFolder: (folderId: string | null) => void;
   onDragStartFile: (fileId: string | null) => void;
   draggingFileId: string | null;
+  sortBy: SortField;
+  sortDir: SortDir;
+  onSort: (f: SortField) => void;
 }) {
-  const { items, bulkMode, selectedIds, onToggleSelect, isTrash } = props;
+  const { items, bulkMode, selectedIds, onToggleSelect, isTrash, sortBy, sortDir, onSort } = props;
   return (
     <Card className="overflow-hidden p-0">
-      <div className="grid items-center gap-3 border-b bg-muted/40 px-4 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"
-        style={{ gridTemplateColumns: bulkMode ? '32px 1fr 120px 180px 180px 40px' : '1fr 120px 180px 180px 40px' }}
+      <div
+        className="grid items-center gap-3 border-b bg-muted/40 px-4 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+        style={{ gridTemplateColumns: bulkMode ? '32px 1fr 100px 140px 140px 140px 40px' : '1fr 100px 140px 140px 140px 40px' }}
       >
         {bulkMode && <span />}
-        <span>Nama</span>
-        <span>Ukuran</span>
-        <span>Disimpan di</span>
-        <span>{isTrash ? 'Dihapus' : 'Diunggah'}</span>
+        <SortableHeader label="Nama" field="name" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+        <SortableHeader label="Ukuran" field="size" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+        <SortableHeader label="Jenis" field="type" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+        <SortableHeader label="Lokasi" field="location" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+        <SortableHeader label={isTrash ? 'Dihapus' : 'Terakhir Ubah'} field="modified" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
         <span />
       </div>
       <div className="divide-y">
@@ -1031,6 +1024,8 @@ function ListView(props: {
     </Card>
   );
 }
+
+// ─── Row ─────────────────────────────────────────────────────────
 
 function Row({
   item,
@@ -1044,7 +1039,6 @@ function Row({
   onShare,
   onVersion,
   onMoveFile,
-  onMoveToFolder,
   bulkMode,
   selectedIds,
   onToggleSelect,
@@ -1056,7 +1050,7 @@ function Row({
 }: {
   item: Item;
   onOpenFolder: (id: string | null) => void;
-  onDownload: (f: FileItem | string) => void;
+  onDownload: (f: FileItem) => void;
   onPreview: (f: FileItem) => void;
   onDelete: (i: Item, permanent?: boolean) => void;
   onRename: (i: Item) => void;
@@ -1065,7 +1059,6 @@ function Row({
   onShare: (f: FileItem) => void;
   onVersion: (f: FileItem) => void;
   onMoveFile: (fileId: string, targetFolderId: string | null) => void;
-  onMoveToFolder: (f: FileItem) => void;
   bulkMode: boolean;
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
@@ -1086,7 +1079,7 @@ function Row({
         selected && 'bg-emerald-50 dark:bg-emerald-950/30',
         isDropTarget && 'ring-2 ring-emerald-500 ring-inset bg-emerald-50 dark:bg-emerald-950/30'
       )}
-      style={{ gridTemplateColumns: bulkMode ? '32px 1fr 120px 180px 180px 40px' : '1fr 120px 180px 180px 40px' }}
+      style={{ gridTemplateColumns: bulkMode ? '32px 1fr 100px 140px 140px 140px 40px' : '1fr 100px 140px 140px 140px 40px' }}
       draggable={isFile && !bulkMode}
       onDragStart={(e) => {
         if (isFile) {
@@ -1150,26 +1143,36 @@ function Row({
         ) : (
           <FileIcon icon={item.icon.icon} color={item.icon.color} className="h-5 w-5 shrink-0" />
         )}
-        <span className="truncate font-medium">{item.name}</span>
+        <div className="min-w-0">
+          <span className="truncate font-medium block">{item.name}</span>
+          {isFile && item.drivePath && (
+            <span className="text-[10px] text-muted-foreground truncate block">
+              {item.drivePath}
+            </span>
+          )}
+        </div>
         {isFile && item.isStarred && (
           <Star className="h-3.5 w-3.5 shrink-0 fill-amber-400 text-amber-400" />
         )}
       </div>
-      <span className="text-muted-foreground">
+      <span className="text-muted-foreground text-xs">
         {item.type === 'folder' ? '—' : item.sizeFormatted ?? formatBytesLocal(item.sizeBytes)}
       </span>
-      <span className="text-muted-foreground">
+      <span className="text-muted-foreground text-xs truncate">
+        {item.type === 'folder' ? '—' : getMimeLabel(item.mimeType)}
+      </span>
+      <span className="text-muted-foreground text-xs truncate">
         {item.type === 'folder' ? (
           '—'
         ) : (
           <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.driveAccountColor }} />
-            <span className="truncate">{item.driveAccountEmail}</span>
+            <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: item.driveAccountColor }} />
+            <span className="truncate">{item.driveAccountEmail.split('@')[0]}</span>
           </span>
         )}
       </span>
-      <span className="text-muted-foreground">
-        {new Date(isTrash && isFile ? (item.deletedAt ?? item.createdAt) : item.createdAt).toLocaleDateString('id-ID', {
+      <span className="text-muted-foreground text-xs">
+        {new Date(isTrash && isFile ? (item.deletedAt ?? item.createdAt) : item.updatedAt ?? item.createdAt).toLocaleDateString('id-ID', {
           day: 'numeric',
           month: 'short',
           year: 'numeric',
@@ -1205,10 +1208,6 @@ function Row({
                   <DropdownMenuItem onClick={() => onVersion(item)}>
                     <History className="mr-2 h-4 w-4" />
                     Version History
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => onMoveToFolder(item)}>
-                    <FolderInput className="mr-2 h-4 w-4" />
-                    Pindahkan ke Folder
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => onRename(item)}>
                     <Pencil className="mr-2 h-4 w-4" />
@@ -1265,10 +1264,12 @@ function Row({
   );
 }
 
+// ─── Grid View ───────────────────────────────────────────────────
+
 function GridView(props: {
   items: Item[];
   onOpenFolder: (id: string | null) => void;
-  onDownload: (f: FileItem | string) => void;
+  onDownload: (f: FileItem) => void;
   onPreview: (f: FileItem) => void;
   onDelete: (i: Item, permanent?: boolean) => void;
   onRename: (i: Item) => void;
@@ -1277,7 +1278,6 @@ function GridView(props: {
   onShare: (f: FileItem) => void;
   onVersion: (f: FileItem) => void;
   onMoveFile: (fileId: string, targetFolderId: string | null) => void;
-  onMoveToFolder: (f: FileItem) => void;
   bulkMode: boolean;
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
@@ -1400,10 +1400,6 @@ function GridView(props: {
                         <History className="mr-2 h-4 w-4" />
                         Version History
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => props.onMoveToFolder(item)}>
-                        <FolderInput className="mr-2 h-4 w-4" />
-                        Pindahkan ke Folder
-                      </DropdownMenuItem>
                     </>
                   )}
                   {props.isTrash && isFile && (
@@ -1433,6 +1429,8 @@ function GridView(props: {
     </div>
   );
 }
+
+// ─── Empty State ─────────────────────────────────────────────────
 
 function EmptyState({ filter, search }: { filter: string | null; search: string }) {
   let title = 'Folder kosong';
@@ -1464,6 +1462,8 @@ function EmptyState({ filter, search }: { filter: string | null; search: string 
   );
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────
+
 function formatBytesLocal(bytesStr: string): string {
   const n = Number(bytesStr);
   if (!Number.isFinite(n) || n < 0) return '—';
@@ -1476,4 +1476,19 @@ function formatBytesLocal(bytesStr: string): string {
     i++;
   }
   return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
+function getMimeLabel(mime: string): string {
+  if (mime.startsWith('image/')) return 'Gambar';
+  if (mime.startsWith('video/')) return 'Video';
+  if (mime.startsWith('audio/')) return 'Audio';
+  if (mime === 'application/pdf') return 'PDF';
+  if (mime.includes('spreadsheet') || mime.includes('excel') || mime.includes('csv')) return 'Spreadsheet';
+  if (mime.includes('document') || mime.includes('word')) return 'Dokumen';
+  if (mime.includes('presentation') || mime.includes('powerpoint')) return 'Presentasi';
+  if (mime.includes('zip') || mime.includes('compressed') || mime.includes('rar')) return 'Arsip';
+  if (mime.startsWith('text/')) return 'Teks';
+  if (mime.includes('json')) return 'JSON';
+  if (mime.includes('xml')) return 'XML';
+  return mime.split('/').pop() || 'File';
 }
