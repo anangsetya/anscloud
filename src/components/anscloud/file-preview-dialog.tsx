@@ -4,13 +4,13 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Download, Star, Loader2, AlertTriangle, File as FileIconLucide, X } from 'lucide-react';
+import { Download, Star, Loader2, AlertTriangle, File as FileIconLucide, X, Maximize2, Minimize2, Film, FileText, Image as ImageIconLucide, Music } from 'lucide-react';
 import { FileIcon as TypeIcon } from './file-icon';
+import { cn } from '@/lib/utils';
 
 interface FilePreviewDialogProps {
   file: {
@@ -54,6 +54,15 @@ function isPreviewableMime(mime: string): boolean {
   );
 }
 
+function getFileTypeLabel(mime: string, isImage: boolean, isVideo: boolean, isAudio: boolean, isPdf: boolean, isText: boolean): string {
+  if (isImage) return 'Gambar';
+  if (isVideo) return 'Video';
+  if (isAudio) return 'Audio';
+  if (isPdf) return 'PDF';
+  if (isText) return 'Teks';
+  return mime.split('/').pop() ?? 'File';
+}
+
 export function FilePreviewDialog({
   file,
   open,
@@ -67,9 +76,17 @@ export function FilePreviewDialog({
     return `/api/files/preview?id=${encodeURIComponent(file.id)}`;
   }, [file, open]);
 
+  // For PDF, append #view=FitH to auto-fit width in browser's PDF viewer
+  const pdfUrl = useMemo(() => {
+    if (!previewUrl || file?.mimeType !== 'application/pdf') return null;
+    return previewUrl + '#view=FitH';
+  }, [previewUrl, file?.mimeType]);
+
   const [loading, setLoading] = useState(!!previewUrl);
   const [error, setError] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     if (!previewUrl) return;
@@ -96,14 +113,17 @@ export function FilePreviewDialog({
       });
     return () => {
       cancelled = true;
-      // Pause video when dialog closes
       if (videoRef.current) videoRef.current.pause();
+      if (audioRef.current) audioRef.current.pause();
     };
   }, [previewUrl]);
 
-  // Pause video when dialog closes
+  // Pause media when dialog closes
   useEffect(() => {
-    if (!open && videoRef.current) videoRef.current.pause();
+    if (!open) {
+      if (videoRef.current) videoRef.current.pause();
+      if (audioRef.current) audioRef.current.pause();
+    }
   }, [open]);
 
   if (!file) return null;
@@ -122,8 +142,7 @@ export function FilePreviewDialog({
     mime.includes('mp3') ||
     mime.includes('wav') ||
     mime.includes('flac') ||
-    mime.includes('aac') ||
-    mime === 'application/ogg';
+    mime.includes('aac');
   const isPdf = mime === 'application/pdf';
   const isText =
     mime.startsWith('text/') ||
@@ -132,38 +151,52 @@ export function FilePreviewDialog({
     mime.includes('xml') ||
     mime.includes('csv');
 
+  const typeLabel = getFileTypeLabel(mime, isImage, isVideo, isAudio, isPdf, isText);
+
+  // Dynamic icon for the file type badge
+  const TypeBadgeIcon = isVideo ? Film : isAudio ? Music : isImage ? ImageIconLucide : isPdf ? FileText : TypeIcon;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[95vh] w-[95vw] max-w-[95vw] overflow-hidden p-0"
+        className={cn(
+          'max-h-[95vh] w-[95vw] max-w-[95vw] overflow-hidden p-0 gap-0',
+          'sm:max-w-[95vw]',
+          isFullscreen && 'max-h-[100vh] w-[100vw] max-w-[100vw] rounded-none sm:max-w-[100vw]'
+        )}
         showCloseButton={false}
       >
-        {/* Header: close button LEFT, info CENTER, actions RIGHT */}
-        <DialogHeader className="flex-row items-center gap-3 border-b px-4 py-3">
+        {/* Header bar */}
+        <div className="flex items-center gap-2 border-b px-3 py-2 bg-background shrink-0">
           <Button
             variant="ghost"
             size="icon"
             className="h-8 w-8 shrink-0"
             onClick={() => onOpenChange(false)}
+            title="Tutup"
           >
             <X className="h-4 w-4" />
           </Button>
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md"
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
             style={{ color: file.icon?.color ?? file.driveAccountColor }}
           >
             <TypeIcon icon={file.icon?.icon ?? 'file'} className="h-5 w-5" />
           </div>
           <div className="min-w-0 flex-1">
-            <DialogTitle className="truncate text-base" title={file.name}>
+            <DialogTitle className="truncate text-sm font-medium leading-tight" title={file.name}>
               {file.name}
             </DialogTitle>
-            <DialogDescription className="flex items-center gap-2 text-xs">
+            <DialogDescription className="flex items-center gap-1.5 text-[11px] leading-tight mt-0.5">
+              <span className="inline-flex items-center gap-1 rounded bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium">
+                <TypeBadgeIcon className={cn('h-3 w-3', isVideo || isAudio || isImage ? '' : '')} style={isVideo || isAudio || isImage ? {} : { color: file.icon?.color ?? file.driveAccountColor }} />
+                {typeLabel}
+              </span>
               <span className="inline-block h-1.5 w-1.5 rounded-full"
                 style={{ backgroundColor: file.driveAccountColor }}
               />
               <span className="truncate">{file.driveAccountEmail}</span>
-              <span>·</span>
-              <span>{file.sizeFormatted ?? formatBytesLocal(file.sizeBytes)}</span>
+              <span className="text-muted-foreground/60">·</span>
+              <span className="text-muted-foreground">{file.sizeFormatted ?? formatBytesLocal(file.sizeBytes)}</span>
             </DialogDescription>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -182,16 +215,25 @@ export function FilePreviewDialog({
               variant="default"
               size="sm"
               onClick={() => onDownload(file.id)}
-              className="bg-emerald-600 hover:bg-emerald-700"
+              className="bg-emerald-600 hover:bg-emerald-700 h-8"
             >
-              <Download className="mr-2 h-4 w-4" />
-              Download
+              <Download className="h-4 w-4" />
+              <span className="ml-1.5 hidden sm:inline">Download</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              title={isFullscreen ? 'Keluar fullscreen' : 'Fullscreen'}
+            >
+              {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </Button>
           </div>
-        </DialogHeader>
+        </div>
 
         {/* Content area */}
-        <div className="max-h-[calc(95vh-65px)] overflow-auto bg-muted/30">
+        <div className={cn('overflow-auto bg-muted/30', isFullscreen ? 'max-h-[calc(100vh-49px)]' : 'max-h-[calc(95vh-49px)]')}>
           {loading ? (
             <div className="flex h-64 items-center justify-center text-muted-foreground">
               <Loader2 className="mr-2 h-5 w-5 animate-spin" />
@@ -214,7 +256,7 @@ export function FilePreviewDialog({
               </div>
             </div>
           ) : isImage ? (
-            <div className="flex items-center justify-center p-4">
+            <div className="flex items-center justify-center p-4 min-h-[300px]">
               <img
                 src={previewUrl}
                 alt={file.name}
@@ -222,7 +264,7 @@ export function FilePreviewDialog({
               />
             </div>
           ) : isVideo ? (
-            <div className="flex items-center justify-center bg-black p-0">
+            <div className="flex items-center justify-center bg-black">
               <video
                 ref={videoRef}
                 src={previewUrl}
@@ -234,17 +276,20 @@ export function FilePreviewDialog({
             </div>
           ) : isAudio ? (
             <div className="flex flex-col items-center gap-6 py-16">
-              <div className="flex h-28 w-28 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-950">
-                <TypeIcon icon="music" className="h-14 w-14 text-amber-500" />
+              <div className="flex h-28 w-28 items-center justify-center rounded-full bg-gradient-to-br from-amber-100 to-orange-100 dark:from-amber-950 dark:to-orange-950">
+                <Music className="h-14 w-14 text-amber-500" />
               </div>
-              <p className="text-lg font-medium">{file.name}</p>
-              <audio src={previewUrl} controls autoPlay className="w-full max-w-lg" />
+              <div className="text-center">
+                <p className="text-lg font-medium">{file.name}</p>
+                <p className="text-sm text-muted-foreground">{file.sizeFormatted ?? formatBytesLocal(file.sizeBytes)}</p>
+              </div>
+              <audio ref={audioRef} src={previewUrl} controls autoPlay className="w-full max-w-lg px-4" />
             </div>
           ) : isPdf ? (
             <iframe
-              src={previewUrl}
+              src={pdfUrl ?? previewUrl}
               title={file.name}
-              className="h-[85vh] w-full border-0 bg-white"
+              className={cn('border-0 bg-white w-full', isFullscreen ? 'h-[calc(100vh-49px)]' : 'h-[85vh]')}
             />
           ) : isText ? (
             <TextPreview url={previewUrl} />

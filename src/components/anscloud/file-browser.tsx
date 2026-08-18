@@ -612,9 +612,9 @@ function Row({
           {selected ? <CheckSquare className="h-4 w-4 text-emerald-600" /> : <Square className="h-4 w-4 text-muted-foreground" />}
         </button>
       )}
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 cursor-pointer items-center gap-3">
         {item.type === 'folder' ? <FolderIcon className="h-5 w-5 shrink-0" /> : <FileIcon icon={item.icon.icon} color={item.icon.color} className="h-5 w-5 shrink-0" />}
-        <span className="truncate font-medium">{item.name}</span>
+        <span className="truncate cursor-pointer font-medium">{item.name}</span>
         {isFile && item.isStarred && <Star className="h-3.5 w-3.5 shrink-0 fill-amber-400 text-amber-400" />}
       </div>
       <span className="text-muted-foreground">{item.type === 'folder' ? '—' : item.sizeFormatted ?? formatBytesLocal(item.sizeBytes)}</span>
@@ -719,7 +719,7 @@ function GridView(props: {
               {item.type === 'folder' ? <FolderIcon className="h-12 w-12" /> : <FileIcon icon={item.icon.icon} color={item.icon.color} className="h-12 w-12" />}
             </div>
             <div className="w-full text-center">
-              <div className="truncate text-sm font-medium" title={item.name}>{item.name}</div>
+              <div className="truncate cursor-pointer text-sm font-medium" title={item.name}>{item.name}</div>
               <div className="text-[11px] text-muted-foreground">{item.type === 'folder' ? 'Folder' : item.sizeFormatted ?? formatBytesLocal(item.sizeBytes)}</div>
               {isFile && (
                 <div className="mt-1 flex items-center justify-center gap-1 text-[10px] text-muted-foreground">
