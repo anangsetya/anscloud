@@ -12,8 +12,8 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronUp,
-  RefreshCcw,
   Link2,
+  MoreVertical,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,6 +27,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 
@@ -55,8 +61,8 @@ interface AccountsManagerProps {
 
 export function AccountsManager({ accounts, loading, onChanged }: AccountsManagerProps) {
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
-  const [refreshingId, setRefreshingId] = useState<string | null>(null);
-  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyLabel, setBusyLabel] = useState('');
   const [oauthConfigured, setOauthConfigured] = useState<boolean | null>(null);
   const [showGuide, setShowGuide] = useState(false);
   const { toast } = useToast();
@@ -73,39 +79,19 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
   }, []);
 
   const handleReconnect = useCallback((accountId: string) => {
-    // Delete the old account first (metadata only, files stay in Drive)
+    setBusyId(accountId); setBusyLabel('Menghubungkan ulang…');
     fetch(`/api/accounts?id=${accountId}`, { method: 'DELETE' })
       .then((res) => {
         if (!res.ok) throw new Error('Gagal menghapus akun lama');
-        // Then redirect to OAuth flow — callback will create a fresh account
         window.location.href = '/api/auth/google/login?returnTo=/?view=accounts';
       })
-      .catch((e) => {
-        toast({ title: 'Gagal', description: e.message, variant: 'destructive' });
-      });
+      .catch((e) => { toast({ title: 'Gagal', description: e.message, variant: 'destructive' }); setBusyId(null); });
   }, [toast]);
 
-  const handleRefreshQuota = useCallback(
+  /** Single refresh button: sync files → refresh quota */
+  const handleRefresh = useCallback(
     async (accountId: string) => {
-      setRefreshingId(accountId);
-      try {
-        const res = await fetch(`/api/accounts/refresh-quota?id=${accountId}`, { method: 'POST' });
-        if (!res.ok) throw new Error('Gagal memeriksa kuota');
-        const data = await res.json();
-        toast({ title: 'Kuota diperbarui', description: `${data.usedBytesFormatted} / ${data.totalBytesFormatted}` });
-        onChanged();
-      } catch (e) {
-        toast({ title: 'Gagal', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
-      } finally {
-        setRefreshingId(null);
-      }
-    },
-    [onChanged, toast]
-  );
-
-  const handleSyncDrive = useCallback(
-    async (accountId: string) => {
-      setSyncingId(accountId);
+      setBusyId(accountId); setBusyLabel('Sinkronisasi file…');
       try {
         const res = await fetch('/api/accounts/sync-drive', {
           method: 'POST',
@@ -114,34 +100,40 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
         });
         const data = await res.json();
         if (!res.ok) {
-          // Detect scope error and suggest reconnecting
           const errMsg = data.error || 'Gagal sinkronisasi';
           if (errMsg.includes('insufficient authentication scopes')) {
             toast({
-              title: 'Sync gagal — Scope tidak cukup',
-              description: 'Token OAuth tidak punya akses Drive. Klik tombol "Hubungkan Ulang" pada akun ini untuk memperbaiki.',
+              title: 'Scope tidak cukup',
+              description: 'Token OAuth tidak punya akses Drive. Hubungkan ulang akun ini.',
               variant: 'destructive',
-              action: {
-                label: 'Hubungkan Ulang',
-                onClick: () => handleReconnect(accountId),
-              },
             });
             return;
           }
           throw new Error(errMsg);
         }
-        toast({
-          title: 'Sinkronisasi selesai',
-          description: `${data.created} file baru, ${data.updated} diperbarui dari ${data.syncableFiles} file.`,
-        });
-        onChanged();
+        toast({ title: 'Sinkronisasi selesai', description: `${data.created} baru, ${data.updated} diperbarui dari ${data.syncableFiles} file.` });
       } catch (e) {
         toast({ title: 'Sync gagal', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
       } finally {
-        setSyncingId(null);
+        setBusyId(null);
+      }
+
+      // After sync, refresh quota
+      try {
+        setBusyId(accountId); setBusyLabel('Memperbarui kuota…');
+        const qRes = await fetch(`/api/accounts/refresh-quota?id=${accountId}`, { method: 'POST' });
+        if (qRes.ok) {
+          const qData = await qRes.json();
+          toast({ title: 'Kuota diperbarui', description: `${qData.usedBytesFormatted} / ${qData.totalBytesFormatted}` });
+        }
+      } catch {
+        // non-fatal
+      } finally {
+        setBusyId(null);
+        onChanged();
       }
     },
-    [onChanged, toast, handleReconnect]
+    [onChanged, toast]
   );
 
   return (
@@ -153,15 +145,10 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => setShowGuide(!showGuide)}>
-            <Cloud className="mr-2 h-4 w-4" />
-            Panduan Setup
+            <Cloud className="mr-2 h-4 w-4" />Panduan Setup
           </Button>
           <Button size="sm" onClick={handleConnectGoogle} disabled={oauthConfigured === false}>
-            {oauthConfigured === false ? (
-              <AlertCircle className="mr-2 h-4 w-4" />
-            ) : (
-              <Cloud className="mr-2 h-4 w-4" />
-            )}
+            {oauthConfigured === false ? <AlertCircle className="mr-2 h-4 w-4" /> : <Cloud className="mr-2 h-4 w-4" />}
             Hubungkan Akun
           </Button>
         </div>
@@ -201,11 +188,10 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
               key={acc.id}
               account={acc}
               onDelete={() => setDeleteTarget(acc)}
-              onRefreshQuota={handleRefreshQuota}
-              onSyncDrive={handleSyncDrive}
+              onRefresh={() => handleRefresh(acc.id)}
               onReconnect={() => handleReconnect(acc.id)}
-              refreshing={refreshingId === acc.id}
-              syncing={syncingId === acc.id}
+              busy={busyId === acc.id}
+              busyLabel={busyLabel}
             />
           ))}
         </div>
@@ -220,8 +206,7 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
             const res = await fetch(`/api/accounts?id=${deleteTarget.id}`, { method: 'DELETE' });
             if (!res.ok) throw new Error('Gagal menghapus akun');
             toast({ title: 'Berhasil', description: `Akun "${deleteTarget.displayName}" dihapus.` });
-            setDeleteTarget(null);
-            onChanged();
+            setDeleteTarget(null); onChanged();
           } catch (e) {
             toast({ title: 'Gagal', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
           }
@@ -249,41 +234,17 @@ function SetupGuide() {
       {open && (
         <CardContent className="px-5 pb-5 pt-0">
           <ol className="ml-5 list-decimal space-y-3 text-sm text-muted-foreground">
-            <li>
-              Buka{' '}
-              <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="link-blue">
-                Google Cloud Console <ExternalLink className="inline h-3 w-3" />
-              </a>{' '}
-              → buat project baru.
-            </li>
-            <li>
-              <strong>APIs & Services → Library</strong> → cari & enable <strong>Google Drive API</strong>.
-            </li>
-            <li>
-              <strong>APIs & Services → OAuth consent screen</strong> → pilih <strong>External</strong> → isi nama app &quot;AnsCloud&quot; → tambahkan scopes:{' '}
-              <code className="rounded bg-muted px-1">auth/drive</code>,{' '}
-              <code className="rounded bg-muted px-1">userinfo.email</code>,{' '}
-              <code className="rounded bg-muted px-1">userinfo.profile</code>.
-            </li>
-            <li>
-              <strong>APIs & Services → Credentials</strong> → <strong>Create OAuth 2.0 Client ID</strong> (Web application) → Authorized Redirect URI:
-              <code className="ml-1 rounded bg-muted px-1">https://domain-anda.com/api/auth/google/callback</code>
-            </li>
-            <li>
-              Set 3 environment variables di Vercel:
-              <pre className="mt-2 overflow-x-auto rounded-lg bg-muted p-3 text-xs">
-                <code>{`GOOGLE_CLIENT_ID=xxxxx.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=xxxxx
-ANSCLOUD_PUBLIC_URL=https://domain-anda.com`}</code>
-              </pre>
+            <li>Buka{' '}<a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="link-blue">Google Cloud Console <ExternalLink className="inline h-3 w-3" /></a>{' '}→ buat project baru.</li>
+            <li><strong>APIs & Services → Library</strong> → cari & enable <strong>Google Drive API</strong>.</li>
+            <li><strong>APIs & Services → OAuth consent screen</strong> → pilih <strong>External</strong> → isi nama app &quot;AnsCloud&quot; → tambahkan scopes:{' '}<code className="rounded bg-muted px-1">auth/drive</code>,{' '}<code className="rounded bg-muted px-1">userinfo.email</code>,{' '}<code className="rounded bg-muted px-1">userinfo.profile</code>.</li>
+            <li><strong>APIs & Services → Credentials</strong> → <strong>Create OAuth 2.0 Client ID</strong> (Web application) → Authorized Redirect URI:<code className="ml-1 rounded bg-muted px-1">https://domain-anda.com/api/auth/google/callback</code></li>
+            <li>Set 3 environment variables di Vercel:
+              <pre className="mt-2 overflow-x-auto rounded-lg bg-muted p-3 text-xs"><code>{`GOOGLE_CLIENT_ID=xxxxx.apps.googleusercontent.com\nGOOGLE_CLIENT_SECRET=xxxxx\nANSCLOUD_PUBLIC_URL=https://domain-anda.com`}</code></pre>
             </li>
             <li>Redeploy di Vercel → tombol <strong>Hubungkan Akun</strong> akan aktif → klik → login Google → selesai.</li>
           </ol>
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
-            <strong>Perhatian:</strong> Scope <code className="rounded bg-amber-100 px-1 dark:bg-amber-900">auth/drive</code> memberikan akses penuh ke semua file di Drive Anda. Cabut akses kapan saja di{' '}
-            <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer" className="underline">
-              myaccount.google.com/permissions
-            </a>.
+            <strong>Perhatian:</strong> Scope <code className="rounded bg-amber-100 px-1 dark:bg-amber-900">auth/drive</code> memberikan akses penuh ke semua file di Drive Anda. Cabut akses kapan saja di{' '}<a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer" className="underline">myaccount.google.com/permissions</a>.
           </div>
         </CardContent>
       )}
@@ -293,22 +254,13 @@ ANSCLOUD_PUBLIC_URL=https://domain-anda.com`}</code>
 
 /* ── Account Card ───────────────────────────────────── */
 
-function AccountCard({
-  account,
-  onDelete,
-  onRefreshQuota,
-  onSyncDrive,
-  onReconnect,
-  refreshing,
-  syncing,
-}: {
+function AccountCard({ account, onDelete, onRefresh, onReconnect, busy, busyLabel }: {
   account: Account;
   onDelete: () => void;
-  onRefreshQuota: (id: string) => void;
-  onSyncDrive: (id: string) => void;
+  onRefresh: () => void;
   onReconnect: () => void;
-  refreshing: boolean;
-  syncing: boolean;
+  busy: boolean;
+  busyLabel: string;
 }) {
   const colorClass = account.usedPct > 85 ? 'bg-rose-500' : account.usedPct > 65 ? 'bg-amber-500' : 'bg-primary';
   const isGoogle = account.provider === 'google';
@@ -317,10 +269,7 @@ function AccountCard({
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-start gap-3">
-          <div
-            className="flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold text-white"
-            style={{ backgroundColor: account.avatarColor }}
-          >
+          <div className="flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold text-white" style={{ backgroundColor: account.avatarColor }}>
             {account.displayName.charAt(0).toUpperCase()}
           </div>
           <div className="min-w-0 flex-1">
@@ -336,59 +285,38 @@ function AccountCard({
               <Mail className="h-3 w-3" />{account.email}
             </div>
           </div>
-          <div className="flex flex-col gap-1">
+          {/* Single refresh button + more menu */}
+          <div className="flex items-center gap-1">
             {isGoogle && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={() => onSyncDrive(account.id)}
-                disabled={syncing || refreshing}
-                title="Sinkronisasi file dari Drive"
-              >
-                <RefreshCcw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} />
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onRefresh} disabled={busy} title="Sync & Refresh kuota">
+                <RefreshCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
               </Button>
             )}
-            {isGoogle && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={() => onRefreshQuota(account.id)}
-                disabled={refreshing || syncing}
-                title="Refresh kuota"
-              >
-                <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
-              </Button>
-            )}
-            {isGoogle && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-blue-600"
-                onClick={onReconnect}
-                disabled={syncing || refreshing}
-                title="Hubungkan ulang akun (fix scope error)"
-              >
-                <Link2 className="h-3.5 w-3.5" />
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-rose-600"
-              onClick={onDelete}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-7 w-7" disabled={busy}>
+                  <MoreVertical className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {isGoogle && (
+                  <DropdownMenuItem onClick={onReconnect}>
+                    <Link2 className="mr-2 h-4 w-4" />Hubungkan Ulang
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={onDelete} className="text-rose-600 focus:text-rose-700">
+                  <Trash2 className="mr-2 h-4 w-4" />Hapus Akun
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {isGoogle && syncing && (
+        {busy && (
           <div className="flex items-center gap-2 rounded-lg bg-blue-50 p-2 text-xs text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span>Menyinkronisasi file dari Google Drive…</span>
+            <span>{busyLabel}</span>
           </div>
         )}
         <div className="flex items-center justify-between text-sm">
@@ -396,10 +324,7 @@ function AccountCard({
           <span className="font-medium">{account.usedBytesFormatted} / {account.totalBytesFormatted}</span>
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-          <div
-            className={cn('h-full rounded-full transition-all duration-500', colorClass)}
-            style={{ width: `${Math.min(100, account.usedPct)}%` }}
-          />
+          <div className={cn('h-full rounded-full transition-all duration-500', colorClass)} style={{ width: `${Math.min(100, account.usedPct)}%` }} />
         </div>
         <div className="flex justify-between text-xs text-muted-foreground">
           <span>{account.fileCount} file</span>

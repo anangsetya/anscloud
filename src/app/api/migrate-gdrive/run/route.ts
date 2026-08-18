@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
   const folderCategories = Array.isArray(body.folderCategories)
     ? (body.folderCategories as string[])
     : null;
+  const fileIds = Array.isArray(body.fileIds) ? (body.fileIds as string[]) : null;
   const deleteOriginals = !!body.deleteOriginals;
 
   if (!sourceAccountId || !targetAccountId) {
@@ -73,9 +74,12 @@ export async function POST(req: NextRequest) {
     // 1. List all files in source Drive.
     const sourceFiles = await listGoogleDriveFiles(sourceAccount, { pageSize: 1000 });
 
-    // 2. Filter by requested categories (if specified).
+    // 2. Filter by requested file IDs (if specified) or by categories.
     let filesToMigrate = sourceFiles;
-    if (folderCategories && folderCategories.length > 0) {
+    if (fileIds && fileIds.length > 0) {
+      const idSet = new Set(fileIds);
+      filesToMigrate = sourceFiles.filter((f) => idSet.has(f.id));
+    } else if (folderCategories && folderCategories.length > 0) {
       filesToMigrate = sourceFiles.filter((f) => {
         const cat = categorizeFile(f.mimeType, f.name);
         return folderCategories.includes(cat.folderName);

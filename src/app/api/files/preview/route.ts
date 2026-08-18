@@ -1,12 +1,7 @@
-// File: src/app/api/files/preview/route.ts
-// FIX: Tambahkan import requireUserId yang sebelumnya HILANG!
-
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { readFile } from '@/lib/storage';
 import { requireUserId } from '@/lib/session';
-
-export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/files/preview?id=...

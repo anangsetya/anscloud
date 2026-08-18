@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -9,7 +9,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Download, Star, Loader2, AlertTriangle, File as FileIcon } from 'lucide-react';
+import { Download, Star, Loader2, AlertTriangle, File as FileIconLucide, X } from 'lucide-react';
 import { FileIcon as TypeIcon } from './file-icon';
 
 interface FilePreviewDialogProps {
@@ -40,7 +40,17 @@ function isPreviewableMime(mime: string): boolean {
     mime.includes('json') ||
     mime.includes('javascript') ||
     mime.includes('xml') ||
-    mime.includes('csv')
+    mime.includes('csv') ||
+    mime === 'application/ogg' ||
+    mime === 'application/x-mpegURL' ||
+    mime.includes('mp4') ||
+    mime.includes('webm') ||
+    mime.includes('mpeg') ||
+    mime.includes('mp3') ||
+    mime.includes('wav') ||
+    mime.includes('flac') ||
+    mime.includes('aac') ||
+    mime.includes('svg')
   );
 }
 
@@ -51,7 +61,6 @@ export function FilePreviewDialog({
   onDownload,
   onToggleStar,
 }: FilePreviewDialogProps) {
-  // Derive preview URL & type directly from props — no need for state sync.
   const previewUrl = useMemo(() => {
     if (!file || !open) return null;
     if (!isPreviewableMime(file.mimeType)) return null;
@@ -60,12 +69,11 @@ export function FilePreviewDialog({
 
   const [loading, setLoading] = useState(!!previewUrl);
   const [error, setError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Preload to detect errors (fire-and-forget, state updates are in async callbacks).
   useEffect(() => {
     if (!previewUrl) return;
     let cancelled = false;
-    // Reset state via batched async — setState in async callbacks is allowed
     Promise.resolve().then(() => {
       if (cancelled) return;
       setLoading(true);
@@ -88,15 +96,34 @@ export function FilePreviewDialog({
       });
     return () => {
       cancelled = true;
+      // Pause video when dialog closes
+      if (videoRef.current) videoRef.current.pause();
     };
   }, [previewUrl]);
+
+  // Pause video when dialog closes
+  useEffect(() => {
+    if (!open && videoRef.current) videoRef.current.pause();
+  }, [open]);
 
   if (!file) return null;
 
   const mime = file.mimeType;
-  const isImage = mime.startsWith('image/');
-  const isVideo = mime.startsWith('video/');
-  const isAudio = mime.startsWith('audio/');
+  const isImage = mime.startsWith('image/') || mime.includes('svg');
+  const isVideo =
+    mime.startsWith('video/') ||
+    mime.includes('mp4') ||
+    mime.includes('webm') ||
+    mime.includes('mpeg') ||
+    mime === 'application/x-mpegURL' ||
+    mime === 'application/ogg';
+  const isAudio =
+    mime.startsWith('audio/') ||
+    mime.includes('mp3') ||
+    mime.includes('wav') ||
+    mime.includes('flac') ||
+    mime.includes('aac') ||
+    mime === 'application/ogg';
   const isPdf = mime === 'application/pdf';
   const isText =
     mime.startsWith('text/') ||
@@ -107,29 +134,39 @@ export function FilePreviewDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-4xl overflow-hidden p-0">
-        <DialogHeader className="border-b px-5 py-3">
-          <div className="flex items-start gap-3">
-            <div
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md"
-              style={{ color: file.icon?.color ?? file.driveAccountColor }}
-            >
-              <TypeIcon icon={file.icon?.icon ?? 'file'} className="h-5 w-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <DialogTitle className="truncate text-base" title={file.name}>
-                {file.name}
-              </DialogTitle>
-              <DialogDescription className="flex items-center gap-2 text-xs">
-                <span
-                  className="inline-block h-1.5 w-1.5 rounded-full"
-                  style={{ backgroundColor: file.driveAccountColor }}
-                />
-                <span className="truncate">{file.driveAccountEmail}</span>
-                <span>·</span>
-                <span>{file.sizeFormatted ?? formatBytesLocal(file.sizeBytes)}</span>
-              </DialogDescription>
-            </div>
+      <DialogContent
+        className="max-h-[95vh] w-[95vw] max-w-[95vw] overflow-hidden p-0"
+        showCloseButton={false}
+      >
+        {/* Header: close button LEFT, info CENTER, actions RIGHT */}
+        <DialogHeader className="flex-row items-center gap-3 border-b px-4 py-3">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={() => onOpenChange(false)}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md"
+            style={{ color: file.icon?.color ?? file.driveAccountColor }}
+          >
+            <TypeIcon icon={file.icon?.icon ?? 'file'} className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <DialogTitle className="truncate text-base" title={file.name}>
+              {file.name}
+            </DialogTitle>
+            <DialogDescription className="flex items-center gap-2 text-xs">
+              <span className="inline-block h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: file.driveAccountColor }}
+              />
+              <span className="truncate">{file.driveAccountEmail}</span>
+              <span>·</span>
+              <span>{file.sizeFormatted ?? formatBytesLocal(file.sizeBytes)}</span>
+            </DialogDescription>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
             {onToggleStar && (
               <Button
                 variant="ghost"
@@ -138,9 +175,7 @@ export function FilePreviewDialog({
                 onClick={() => onToggleStar(file.id, !!file.isStarred)}
                 title={file.isStarred ? 'Hapus dari starred' : 'Tandai sebagai starred'}
               >
-                <Star
-                  className={`h-4 w-4 ${file.isStarred ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground'}`}
-                />
+                <Star className={`h-4 w-4 ${file.isStarred ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground'}`} />
               </Button>
             )}
             <Button
@@ -155,7 +190,8 @@ export function FilePreviewDialog({
           </div>
         </DialogHeader>
 
-        <div className="max-h-[calc(90vh-80px)] overflow-auto bg-muted/30 p-4">
+        {/* Content area */}
+        <div className="max-h-[calc(95vh-65px)] overflow-auto bg-muted/30">
           {loading ? (
             <div className="flex h-64 items-center justify-center text-muted-foreground">
               <Loader2 className="mr-2 h-5 w-5 animate-spin" />
@@ -169,40 +205,46 @@ export function FilePreviewDialog({
             </div>
           ) : !previewUrl ? (
             <div className="flex h-64 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
-              <FileIcon className="h-12 w-12" />
+              <FileIconLucide className="h-12 w-12" />
               <div>
                 <p className="font-medium">Preview tidak tersedia</p>
                 <p className="text-sm">
-                  Tipe file ini tidak bisa di-preview di browser. Gunakan tombol Download.
+                  Tipe file <code className="rounded bg-muted px-1 text-xs">{mime}</code> tidak bisa di-preview di browser. Gunakan tombol Download.
                 </p>
               </div>
             </div>
           ) : isImage ? (
-            <div className="flex items-center justify-center">
+            <div className="flex items-center justify-center p-4">
               <img
                 src={previewUrl}
                 alt={file.name}
-                className="max-h-[70vh] max-w-full rounded-md object-contain shadow-md"
+                className="max-h-[85vh] max-w-full rounded-md object-contain shadow-md"
               />
             </div>
           ) : isVideo ? (
-            <video
-              src={previewUrl}
-              controls
-              className="mx-auto max-h-[70vh] max-w-full rounded-md"
-            />
+            <div className="flex items-center justify-center bg-black p-0">
+              <video
+                ref={videoRef}
+                src={previewUrl}
+                controls
+                autoPlay
+                playsInline
+                className="max-h-[85vh] w-full"
+              />
+            </div>
           ) : isAudio ? (
-            <div className="flex flex-col items-center gap-4 py-12">
-              <div className="flex h-24 w-24 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-950">
-                <TypeIcon icon="music" className="h-12 w-12 text-amber-500" />
+            <div className="flex flex-col items-center gap-6 py-16">
+              <div className="flex h-28 w-28 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-950">
+                <TypeIcon icon="music" className="h-14 w-14 text-amber-500" />
               </div>
-              <audio src={previewUrl} controls className="w-full max-w-md" />
+              <p className="text-lg font-medium">{file.name}</p>
+              <audio src={previewUrl} controls autoPlay className="w-full max-w-lg" />
             </div>
           ) : isPdf ? (
             <iframe
               src={previewUrl}
               title={file.name}
-              className="h-[70vh] w-full rounded-md border-0 bg-white"
+              className="h-[85vh] w-full border-0 bg-white"
             />
           ) : isText ? (
             <TextPreview url={previewUrl} />
@@ -220,13 +262,11 @@ function TextPreview({ url }: { url: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    /* eslint-disable react-hooks/set-state-in-effect -- async fetch needs to update state */
     setLoading(true);
     fetch(url)
       .then((r) => r.text())
       .then((t) => {
         if (cancelled) return;
-        // Cap at 100KB for performance
         setContent(t.length > 100000 ? t.slice(0, 100000) + '\n\n[... truncated]' : t);
         setLoading(false);
       })
@@ -235,15 +275,13 @@ function TextPreview({ url }: { url: string }) {
         setError(e instanceof Error ? e.message : 'Gagal memuat teks');
         setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [url]);
 
   if (loading) return <div className="p-4 text-sm text-muted-foreground">Memuat teks…</div>;
   if (error) return <div className="p-4 text-sm text-rose-600">{error}</div>;
   return (
-    <pre className="max-h-[70vh] overflow-auto rounded-md bg-slate-900 p-4 text-sm text-slate-100 dark:bg-slate-950">
+    <pre className="max-h-[85vh] overflow-auto bg-slate-900 p-4 text-sm text-slate-100 dark:bg-slate-950">
       <code>{content}</code>
     </pre>
   );
@@ -256,9 +294,6 @@ function formatBytesLocal(bytesStr: string): string {
   const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
   let v = n / 1024;
   let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
   return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
 }
