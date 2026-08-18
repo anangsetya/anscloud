@@ -178,7 +178,8 @@ export async function POST(req: NextRequest) {
   let removed = 0;
   for (const sf of staleFiles) {
     if (!scannedIds.has(sf.physicalFileId)) {
-      await db.virtualFile.update({ where: { id: sf.id }, data: { deletedAt: new Date() } });
+      // Permanent delete from DB — file is not owned by this account
+      await db.virtualFile.delete({ where: { id: sf.id } });
       removed++;
     }
   }

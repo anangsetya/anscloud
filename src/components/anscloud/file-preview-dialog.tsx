@@ -83,7 +83,7 @@ function getDialogSizeClasses(
   if (isFullscreen) return 'max-h-[100vh] w-[100vw] max-w-[100vw] rounded-none sm:max-w-[100vw]';
   if (isPdf) return 'max-h-[90vh] max-w-4xl sm:max-w-4xl';
   if (isImage) return 'max-h-[90vh] max-w-4xl sm:max-w-4xl';
-  if (isVideo) return 'max-h-[90vh] max-w-5xl sm:max-w-5xl';
+  if (isVideo) return 'max-h-[90vh] w-full max-w-none';
   if (isAudio) return 'max-h-[90vh] max-w-md sm:max-w-md';
   if (isText) return 'max-h-[90vh] max-w-3xl sm:max-w-3xl';
   return 'max-h-[90vh] max-w-4xl sm:max-w-4xl';
@@ -288,7 +288,7 @@ export function FilePreviewDialog({
             </div>
           ) : isVideo ? (
             <div className="flex items-center justify-center bg-black">
-              <video ref={videoRef} src={previewUrl} controls autoPlay playsInline className="max-h-[80vh] w-full" />
+              <video ref={videoRef} src={previewUrl} controls autoPlay playsInline className="max-h-[80vh] max-w-full" onError={() => setError('Gagal memutar video. Coba Download.')} />
             </div>
           ) : isAudio ? (
             <div className="flex flex-col items-center gap-6 py-16">

@@ -24,6 +24,7 @@ import {
   FileArchive,
   Loader2,
   ArrowUpDown,
+  Filter,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -117,6 +118,7 @@ export function FileBrowser({
   const [zipping, setZipping] = useState(false);
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
   const [draggingFileId, setDraggingFileId] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState<string>('all');
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastClickIdRef = useRef<string | null>(null);
   const CLICK_DELAY = 180;
@@ -376,27 +378,51 @@ export function FileBrowser({
 
   useEffect(() => { return () => { if (clickTimerRef.current) clearTimeout(clickTimerRef.current); }; }, []);
 
-  // Navigation: list of file-type items for prev/next in preview
-  const previewableFiles = useMemo(
-    () => items.filter((i): i is FileItem => i.type === 'file' && isPreviewableMime(i.mimeType)),
-    [items]
+  // File type filter (client-side)
+  const TYPE_FILTERS: Array<{ value: string; label: string }> = [
+    { value: 'all', label: 'Semua Tipe' },
+    { value: 'image', label: 'Gambar' },
+    { value: 'video', label: 'Video' },
+    { value: 'audio', label: 'Audio' },
+    { value: 'document', label: 'Dokumen' },
+    { value: 'archive', label: 'Arsip' },
+    { value: 'other', label: 'Lainnya' },
+  ];
+
+  function matchesTypeFilter(item: Item): boolean {
+    if (typeFilter === 'all' || item.type === 'folder') return true;
+    const m = (item as FileItem).mimeType ?? '';
+    switch (typeFilter) {
+      case 'image': return m.startsWith('image/') || m.includes('svg');
+      case 'video': return m.startsWith('video/') || ['mp4', 'webm', 'mpeg', '3gp', 'mov'].some(e => m.includes(e));
+      case 'audio': return m.startsWith('audio/') || ['mp3', 'wav', 'flac', 'aac', 'm4a'].some(e => m.includes(e));
+      case 'document': return m === 'application/pdf' || m.includes('word') || m.includes('spreadsheet') || m.includes('presentation') || m.includes('document') || m.startsWith('text/') || m.includes('json') || m.includes('csv');
+      case 'archive': return m.includes('zip') || m.includes('rar') || m.includes('compressed') || m.includes('tar') || m.includes('7z') || m.includes('gz');
+      default: return !m.startsWith('image/') && !m.startsWith('video/') && !m.startsWith('audio/') && m !== 'application/pdf';
+    }
+  }
+
+  const filteredItems = useMemo(() => items.filter(matchesTypeFilter), [items, typeFilter]);
+  const filteredPreviewableFiles = useMemo(
+    () => filteredItems.filter((i): i is FileItem => i.type === 'file' && isPreviewableMime(i.mimeType)),
+    [filteredItems]
   );
-  const previewIndex = useMemo(
-    () => (previewFile ? previewableFiles.findIndex((f) => f.id === previewFile.id) : -1),
-    [previewFile, previewableFiles]
+  const filteredPreviewIndex = useMemo(
+    () => (previewFile ? filteredPreviewableFiles.findIndex((f) => f.id === previewFile.id) : -1),
+    [previewFile, filteredPreviewableFiles]
   );
   const navPrev = useCallback(() => {
-    if (previewIndex > 0) setPreviewFile(previewableFiles[previewIndex - 1]);
-  }, [previewIndex, previewableFiles]);
+    if (filteredPreviewIndex > 0) setPreviewFile(filteredPreviewableFiles[filteredPreviewIndex - 1]);
+  }, [filteredPreviewIndex, filteredPreviewableFiles]);
   const navNext = useCallback(() => {
-    if (previewIndex < previewableFiles.length - 1) setPreviewFile(previewableFiles[previewIndex + 1]);
-  }, [previewIndex, previewableFiles]);
+    if (filteredPreviewIndex < filteredPreviewableFiles.length - 1) setPreviewFile(filteredPreviewableFiles[filteredPreviewIndex + 1]);
+  }, [filteredPreviewIndex, filteredPreviewableFiles]);
 
   const isTrash = filter === 'trash';
   const isSpecial = filter !== null || !!search.trim();
   const canGoBack = history.length > 0 && !isSpecial;
-
   const activeSortLabel = SORT_OPTIONS.find((o) => o.field === sortField)?.label ?? 'Nama';
+  const activeTypeLabel = TYPE_FILTERS.find((o) => o.value === typeFilter)?.label ?? 'Semua';
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -421,6 +447,26 @@ export function FileBrowser({
         {breadcrumb.length === 1 && <span className="ml-1 font-medium">{breadcrumb[0].name}</span>}
 
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {/* Type filter dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant={typeFilter !== 'all' ? 'default' : 'ghost'} size="sm" className="h-8 gap-1 text-xs">
+                <Filter className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{activeTypeLabel}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {TYPE_FILTERS.map((opt) => (
+                <DropdownMenuItem key={opt.value} onClick={() => setTypeFilter(opt.value)}>
+                  <span className={cn('w-4 text-center', typeFilter === opt.value && 'font-bold text-primary')}>
+                    {typeFilter === opt.value ? '●' : ''}
+                  </span>
+                  {opt.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           {/* Sort dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -488,11 +534,11 @@ export function FileBrowser({
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {loading ? (
           <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">Memuat…</div>
-        ) : items.length === 0 ? (
+        ) : filteredItems.length === 0 ? (
           <EmptyState filter={filter} search={search} />
         ) : viewMode === 'list' ? (
           <ListView
-            items={items} sortField={sortField} sortDir={sortDir}
+            items={filteredItems} sortField={sortField} sortDir={sortDir}
             onSortChange={handleSortChange}
             onItemDoubleClick={handleItemClick}
             onDownload={handleDownload} onPreview={handlePreview}
@@ -508,7 +554,7 @@ export function FileBrowser({
           />
         ) : (
           <GridView
-            items={items}
+            items={filteredItems}
             onItemDoubleClick={handleItemClick}
             onDownload={handleDownload} onPreview={handlePreview}
             onDelete={handleDelete} onRename={startRename}
@@ -545,8 +591,8 @@ export function FileBrowser({
         onOpenChange={(o) => !o && setPreviewFile(null)}
         onDownload={handleDownload}
         onToggleStar={handleToggleStar}
-        canGoPrev={previewIndex > 0}
-        canGoNext={previewIndex < previewableFiles.length - 1}
+        canGoPrev={filteredPreviewIndex > 0}
+        canGoNext={filteredPreviewIndex < filteredPreviewableFiles.length - 1}
         onPrev={navPrev}
         onNext={navNext}
       />
