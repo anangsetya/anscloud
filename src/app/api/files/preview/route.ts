@@ -59,9 +59,10 @@ export async function GET(req: NextRequest) {
         expiry_date: account.tokenExpiresAt ? account.tokenExpiresAt.getTime() : undefined,
       });
 
-      // Auto-refresh if expired
-      const { credential } = await oauth2Client.getAccessToken();
-      const token = credential?.access_token;
+      // Auto-refresh if expired, then get fresh token
+      await oauth2Client.getAccessToken();
+      const credentials = oauth2Client.getCredentials();
+      const token = credentials.access_token;
       if (!token) {
         return NextResponse.json({ error: 'Gagal mendapatkan akses token.' }, { status: 401 });
       }
