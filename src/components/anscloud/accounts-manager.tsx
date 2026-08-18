@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronUp,
   RefreshCcw,
+  Link2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -71,6 +72,19 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
     window.location.href = '/api/auth/google/login?returnTo=/?view=accounts';
   }, []);
 
+  const handleReconnect = useCallback((accountId: string) => {
+    // Delete the old account first (metadata only, files stay in Drive)
+    fetch(`/api/accounts?id=${accountId}`, { method: 'DELETE' })
+      .then((res) => {
+        if (!res.ok) throw new Error('Gagal menghapus akun lama');
+        // Then redirect to OAuth flow — callback will create a fresh account
+        window.location.href = '/api/auth/google/login?returnTo=/?view=accounts';
+      })
+      .catch((e) => {
+        toast({ title: 'Gagal', description: e.message, variant: 'destructive' });
+      });
+  }, [toast]);
+
   const handleRefreshQuota = useCallback(
     async (accountId: string) => {
       setRefreshingId(accountId);
@@ -99,7 +113,23 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
           body: JSON.stringify({ accountId }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Gagal sinkronisasi');
+        if (!res.ok) {
+          // Detect scope error and suggest reconnecting
+          const errMsg = data.error || 'Gagal sinkronisasi';
+          if (errMsg.includes('insufficient authentication scopes')) {
+            toast({
+              title: 'Sync gagal — Scope tidak cukup',
+              description: 'Token OAuth tidak punya akses Drive. Klik tombol "Hubungkan Ulang" pada akun ini untuk memperbaiki.',
+              variant: 'destructive',
+              action: {
+                label: 'Hubungkan Ulang',
+                onClick: () => handleReconnect(accountId),
+              },
+            });
+            return;
+          }
+          throw new Error(errMsg);
+        }
         toast({
           title: 'Sinkronisasi selesai',
           description: `${data.created} file baru, ${data.updated} diperbarui dari ${data.syncableFiles} file.`,
@@ -111,7 +141,7 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
         setSyncingId(null);
       }
     },
-    [onChanged, toast]
+    [onChanged, toast, handleReconnect]
   );
 
   return (
@@ -173,6 +203,7 @@ export function AccountsManager({ accounts, loading, onChanged }: AccountsManage
               onDelete={() => setDeleteTarget(acc)}
               onRefreshQuota={handleRefreshQuota}
               onSyncDrive={handleSyncDrive}
+              onReconnect={() => handleReconnect(acc.id)}
               refreshing={refreshingId === acc.id}
               syncing={syncingId === acc.id}
             />
@@ -267,6 +298,7 @@ function AccountCard({
   onDelete,
   onRefreshQuota,
   onSyncDrive,
+  onReconnect,
   refreshing,
   syncing,
 }: {
@@ -274,6 +306,7 @@ function AccountCard({
   onDelete: () => void;
   onRefreshQuota: (id: string) => void;
   onSyncDrive: (id: string) => void;
+  onReconnect: () => void;
   refreshing: boolean;
   syncing: boolean;
 }) {
@@ -326,6 +359,18 @@ function AccountCard({
                 title="Refresh kuota"
               >
                 <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+              </Button>
+            )}
+            {isGoogle && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-blue-600"
+                onClick={onReconnect}
+                disabled={syncing || refreshing}
+                title="Hubungkan ulang akun (fix scope error)"
+              >
+                <Link2 className="h-3.5 w-3.5" />
               </Button>
             )}
             <Button
