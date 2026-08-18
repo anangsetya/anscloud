@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   ChevronRight,
   ChevronLeft,
@@ -46,7 +46,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { FileIcon, FolderIcon } from './file-icon';
-import { FilePreviewDialog } from './file-preview-dialog';
+import { FilePreviewDialog, isPreviewableMime } from './file-preview-dialog';
 import { ShareDialog } from './share-dialog';
 import { VersionHistoryDialog } from './version-history-dialog';
 import { cn } from '@/lib/utils';
@@ -119,6 +119,7 @@ export function FileBrowser({
   const [draggingFileId, setDraggingFileId] = useState<string | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastClickIdRef = useRef<string | null>(null);
+  const CLICK_DELAY = 180;
   const { toast } = useToast();
 
   const SORT_OPTIONS: Array<{ field: SortField; label: string }> = [
@@ -218,7 +219,7 @@ export function FileBrowser({
       clickTimerRef.current = null;
       lastClickIdRef.current = null;
       toggleSelect(item.id);
-    }, 300);
+    }, CLICK_DELAY);
   }
 
   function handleDownload(file: FileItem) {
@@ -301,6 +302,25 @@ export function FileBrowser({
     }
   }
 
+  async function handleDeleteAllTrash() {
+    const trashFiles = items.filter((i) => i.type === 'file');
+    if (trashFiles.length === 0) return;
+    if (!confirm(`Hapus permanen SEMUA ${trashFiles.length} file di trash? Tindakan ini tidak bisa dibatalkan.`)) return;
+    try {
+      const res = await fetch('/api/files/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: trashFiles.map((i) => i.id), action: 'permanent_delete' }),
+      });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error ?? 'Gagal menghapus'); }
+      const data = await res.json();
+      toast({ title: 'Berhasil', description: `${data.processed} file dihapus permanen dari trash.` });
+      onRefresh();
+    } catch (e) {
+      toast({ title: 'Gagal', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
+    }
+  }
+
   async function handleDownloadZip() {
     if (selectedIds.size === 0) return;
     setZipping(true);
@@ -355,6 +375,22 @@ export function FileBrowser({
   }, [items, previewFile]);
 
   useEffect(() => { return () => { if (clickTimerRef.current) clearTimeout(clickTimerRef.current); }; }, []);
+
+  // Navigation: list of file-type items for prev/next in preview
+  const previewableFiles = useMemo(
+    () => items.filter((i): i is FileItem => i.type === 'file' && isPreviewableMime(i.mimeType)),
+    [items]
+  );
+  const previewIndex = useMemo(
+    () => (previewFile ? previewableFiles.findIndex((f) => f.id === previewFile.id) : -1),
+    [previewFile, previewableFiles]
+  );
+  const navPrev = useCallback(() => {
+    if (previewIndex > 0) setPreviewFile(previewableFiles[previewIndex - 1]);
+  }, [previewIndex, previewableFiles]);
+  const navNext = useCallback(() => {
+    if (previewIndex < previewableFiles.length - 1) setPreviewFile(previewableFiles[previewIndex + 1]);
+  }, [previewIndex, previewableFiles]);
 
   const isTrash = filter === 'trash';
   const isSpecial = filter !== null || !!search.trim();
@@ -411,6 +447,12 @@ export function FileBrowser({
               {bulkMode ? <X className="h-4 w-4" /> : <CheckSquare className="h-4 w-4" />}
             </Button>
           )}
+          {isTrash && items.length > 0 && (
+            <Button variant="destructive" size="sm" className="h-8 gap-1 text-xs" onClick={handleDeleteAllTrash} disabled={loading}>
+              <Trash2 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Hapus Semua</span>
+            </Button>
+          )}
           <Button variant={viewMode === 'list' ? 'default' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setViewMode('list')} title="Tampilan list">
             <ListIcon className="h-4 w-4" />
           </Button>
@@ -439,13 +481,6 @@ export function FileBrowser({
               <Button size="sm" variant="destructive" onClick={() => handleBulkAction('permanent_delete')}><Trash2 className="mr-1 h-3.5 w-3.5" />Hapus Permanen</Button>
             </>)}
           </div>
-        </div>
-      )}
-
-      {/* Hint */}
-      {!isSpecial && !bulkMode && items.length > 0 && (
-        <div className="border-b bg-muted/30 px-6 py-1.5 text-[11px] text-muted-foreground">
-          Klik untuk memilih · Dobel klik untuk membuka file/masuk folder
         </div>
       )}
 
@@ -504,7 +539,17 @@ export function FileBrowser({
         </DialogContent>
       </Dialog>
 
-      <FilePreviewDialog file={previewFile} open={!!previewFile} onOpenChange={(o) => !o && setPreviewFile(null)} onDownload={handleDownload} onToggleStar={handleToggleStar} />
+      <FilePreviewDialog
+        file={previewFile}
+        open={!!previewFile}
+        onOpenChange={(o) => !o && setPreviewFile(null)}
+        onDownload={handleDownload}
+        onToggleStar={handleToggleStar}
+        canGoPrev={previewIndex > 0}
+        canGoNext={previewIndex < previewableFiles.length - 1}
+        onPrev={navPrev}
+        onNext={navNext}
+      />
       <ShareDialog file={shareTarget} open={!!shareTarget} onOpenChange={(o) => !o && setShareTarget(null)} />
       <VersionHistoryDialog file={versionTarget} open={!!versionTarget} onOpenChange={(o) => !o && setVersionTarget(null)} onRestored={onRefresh} />
     </div>

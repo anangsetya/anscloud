@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   ArrowLeftRight,
   RefreshCw,
@@ -14,6 +14,7 @@ import {
   Trash2,
   CheckSquare,
   Square,
+  Clock,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -29,6 +30,8 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { getFileIcon } from '@/lib/file-utils';
+import { useMigrationStore, startMigration, completeMigration, failMigration, resetMigration } from '@/lib/migration-store';
+import type { MigrationResult } from '@/lib/migration-store';
 
 interface Account {
   id: string;
@@ -64,24 +67,25 @@ interface ScanResult {
   }>;
 }
 
-interface RunResult {
-  mode: string;
-  migrated: number;
-  skipped: number;
-  failed: number;
-  totalBytesMigrated: string;
-  totalBytesMigratedFormatted?: string;
-  errors?: Array<{ fileName: string; error: string }>;
-  message?: string;
-}
-
 interface MigrateViewProps {
   accounts: Account[];
   loading: boolean;
   onChanged: () => void;
 }
 
-export function MigrateView({ accounts, loading }: MigrateViewProps) {
+/** Elapsed time formatter */
+function formatElapsed(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}d`;
+  const min = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (min < 60) return `${min}m ${s}d`;
+  const hr = Math.floor(min / 60);
+  const m = min % 60;
+  return `${hr}j ${m}m`;
+}
+
+export function MigrateView({ accounts, loading, onChanged }: MigrateViewProps) {
   const googleAccounts = accounts.filter((a) => a.provider === 'google');
   const [sourceId, setSourceId] = useState<string>('');
   const [targetId, setTargetId] = useState<string>('');
@@ -93,9 +97,35 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
-  const [running, setRunning] = useState(false);
-  const [runResult, setRunResult] = useState<RunResult | null>(null);
   const { toast } = useToast();
+
+  // ── Global migration state (persists across tab switches) ──
+  const migration = useMigrationStore();
+  const isRunning = migration.status === 'running';
+  const isDone = migration.status === 'done' || migration.status === 'error';
+
+  // Elapsed timer while running
+  const [elapsed, setElapsed] = useState('');
+  useEffect(() => {
+    if (!isRunning || !migration.startedAt) { setElapsed(''); return; }
+    const tick = () => setElapsed(formatElapsed(Date.now() - migration.startedAt!));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isRunning, migration.startedAt]);
+
+  // When migration completes while user is on this page, sync local state
+  useEffect(() => {
+    if (migration.status === 'done' && migration.result) {
+      toast({ title: 'Migrasi selesai', description: `${migration.result.migrated} file dipindah, ${migration.result.skipped} dilewati, ${migration.result.failed} gagal.` });
+      onChanged?.();
+    }
+    if (migration.status === 'error' && migration.error) {
+      toast({ title: 'Migrasi gagal', description: migration.error, variant: 'destructive' });
+    }
+  // Only react to status changes, not onChanged
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [migration.status]);
 
   // Auto-select first Google account when list loads
   const ensureSourceId = useCallback(() => {
@@ -106,7 +136,7 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
 
   async function handleScan() {
     if (!sourceId) { toast({ title: 'Pilih akun sumber', variant: 'destructive' }); return; }
-    setScanning(true); setScanResult(null); setRunResult(null); setSelectedFileIds(new Set());
+    setScanning(true); setScanResult(null); resetMigration(); setSelectedFileIds(new Set());
     try {
       const res = await fetch('/api/migrate-gdrive/scan', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -116,7 +146,6 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
       const data = (await res.json()) as ScanResult;
       setScanResult(data);
       setSelectedCategories(new Set(data.folders.map((f) => f.folderName)));
-      // Select all individual files by default
       const allIds = new Set<string>();
       data.folders.forEach((f) => f.files.forEach((fi) => allIds.add(fi.id)));
       setSelectedFileIds(allIds);
@@ -135,7 +164,10 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
     if (sourceId !== targetId && deleteOriginals && !confirm(
       `Anda yakin ingin MENGHAPUS ${selectedFileIds.size} file asli setelah dicopy? Tindakan ini tidak bisa dibatalkan.`
     )) return;
-    setRunning(true); setRunResult(null);
+
+    // Update global store — keeps running even if user navigates away
+    startMigration(selectedFileIds.size);
+
     try {
       const res = await fetch('/api/migrate-gdrive/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -147,12 +179,12 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
         }),
       });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error ?? 'Gagal run migrate'); }
-      const data = (await res.json()) as RunResult;
-      setRunResult(data);
-      toast({ title: 'Migrasi selesai', description: `${data.migrated} file dipindah, ${data.skipped} dilewati, ${data.failed} gagal.` });
+      const data = (await res.json()) as MigrationResult;
+      completeMigration(data);
+      onChanged?.();
     } catch (e) {
-      toast({ title: 'Gagal migrasi', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
-    } finally { setRunning(false); }
+      failMigration(e instanceof Error ? e.message : 'Gagal migrasi');
+    }
   }
 
   function toggleFolder(name: string) {
@@ -162,19 +194,13 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
   function toggleCategory(name: string) {
     setSelectedCategories((prev) => {
       const next = new Set(prev); if (next.has(name)) next.delete(name); else next.add(name);
-      // Also toggle individual file selections
       if (scanResult) {
         const folder = scanResult.folders.find((f) => f.folderName === name);
         if (folder) {
           setSelectedFileIds((prevIds) => {
             const nextIds = new Set(prevIds);
-            if (next.has(name)) {
-              // Deselect all files in this category
-              folder.files.forEach((f) => nextIds.delete(f.id));
-            } else {
-              // Select all files in this category
-              folder.files.forEach((f) => nextIds.add(f.id));
-            }
+            if (next.has(name)) { folder.files.forEach((f) => nextIds.delete(f.id)); }
+            else { folder.files.forEach((f) => nextIds.add(f.id)); }
             return nextIds;
           });
         }
@@ -196,8 +222,7 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
   }
 
   function deselectAllFiles() {
-    setSelectedFileIds(new Set());
-    setSelectedCategories(new Set());
+    setSelectedFileIds(new Set()); setSelectedCategories(new Set());
   }
 
   const totalSelectedFiles = selectedFileIds.size;
@@ -225,6 +250,22 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
         <h2 className="text-lg font-semibold">Migrate GDrive</h2>
         <p className="text-sm text-muted-foreground">Pindahkan file dari satu akun Google Drive ke akun lain, atau reorganize file di akun yang sama. Centang file/folder yang ingin dipindahkan.</p>
       </div>
+
+      {/* ── Background migration status (shown when returning to this tab) ── */}
+      {isRunning && (
+        <Card className="mb-6 border-blue-300 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30">
+          <CardContent className="flex items-center gap-4 p-4">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/50">
+              <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+            </div>
+            <div className="flex-1">
+              <p className="font-medium text-blue-800 dark:text-blue-200">Migrasi sedang berjalan…</p>
+              <p className="text-sm text-blue-600 dark:text-blue-300">{migration.totalFiles} file · {elapsed && `sudah berjalan ${elapsed}`}</p>
+            </div>
+            <p className="text-xs text-blue-500">Anda bisa pindah halaman, proses akan tetap berjalan.</p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Setup card */}
       <Card className="mb-6">
@@ -267,12 +308,12 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-4">
-            <Button onClick={handleScan} disabled={scanning || !sourceId} variant="outline">
+            <Button onClick={handleScan} disabled={scanning || !sourceId || isRunning} variant="outline">
               {scanning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Scan Files
             </Button>
             <div className="flex items-center gap-2">
-              <Switch id="delete-originals" checked={deleteOriginals} onCheckedChange={setDeleteOriginals} disabled={sourceId === targetId} />
+              <Switch id="delete-originals" checked={deleteOriginals} onCheckedChange={setDeleteOriginals} disabled={sourceId === targetId || isRunning} />
               <Label htmlFor="delete-originals" className="cursor-pointer text-sm">Hapus file asli setelah copy</Label>
             </div>
             {sourceId === targetId && sourceId !== '' && (
@@ -294,15 +335,14 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
                 </p>
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={selectAllFiles}>Pilih Semua</Button>
-                <Button variant="outline" size="sm" onClick={deselectAllFiles}>Batal Pilih</Button>
+                <Button variant="outline" size="sm" onClick={selectAllFiles} disabled={isRunning}>Pilih Semua</Button>
+                <Button variant="outline" size="sm" onClick={deselectAllFiles} disabled={isRunning}>Batal Pilih</Button>
               </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-2">
             {scanResult.folders.map((folder) => {
               const expanded = expandedFolders.has(folder.folderName);
-              const categorySelected = selectedCategories.has(folder.folderName);
               const folderFileIds = folder.files.map((f) => f.id);
               const allFilesSelected = folderFileIds.every((id) => selectedFileIds.has(id));
               const someFilesSelected = folderFileIds.some((id) => selectedFileIds.has(id));
@@ -310,9 +350,9 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
               return (
                 <div key={folder.folderName} className="rounded-md border bg-card overflow-hidden">
                   <div className="flex items-center gap-3 p-3">
-                    {/* Category checkbox */}
                     <button
                       onClick={() => toggleCategory(folder.folderName)}
+                      disabled={isRunning}
                       className={cn(
                         'flex h-5 w-5 items-center justify-center rounded border-2 transition-colors',
                         allFilesSelected
@@ -353,10 +393,11 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
                               'flex items-center gap-3 px-3 py-2 text-sm border-b last:border-b-0 cursor-pointer hover:bg-muted/60 transition-colors',
                               fileSelected && 'bg-emerald-50/60 dark:bg-emerald-950/20'
                             )}
-                            onClick={() => toggleFile(file.id)}
+                            onClick={() => !isRunning && toggleFile(file.id)}
                           >
                             <button
-                              onClick={(e) => { e.stopPropagation(); toggleFile(file.id); }}
+                              onClick={(e) => { e.stopPropagation(); !isRunning && toggleFile(file.id); }}
+                              disabled={isRunning}
                               className={cn(
                                 'flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition-colors',
                                 fileSelected
@@ -386,11 +427,11 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
             <div className="flex flex-wrap items-center gap-3 pt-2">
               <Button
                 onClick={handleRun}
-                disabled={running || totalSelectedFiles === 0}
+                disabled={isRunning || totalSelectedFiles === 0}
                 className="bg-emerald-600 hover:bg-emerald-700"
               >
-                {running ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowLeftRight className="mr-2 h-4 w-4" />}
-                {running ? 'Memigrasi…' : `Migrasi ${totalSelectedFiles} file`}
+                {isRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowLeftRight className="mr-2 h-4 w-4" />}
+                {isRunning ? `Memigrasi… ${elapsed}` : `Migrasi ${totalSelectedFiles} file`}
               </Button>
               <span className="text-xs text-muted-foreground">
                 {totalSelectedFiles} dari {scanResult.totalFileCount} file dipilih
@@ -400,33 +441,50 @@ export function MigrateView({ accounts, loading }: MigrateViewProps) {
         </Card>
       )}
 
-      {/* Run results */}
-      {runResult && (
-        <Card className={cn(runResult.failed > 0 ? 'border-amber-300' : 'border-emerald-300')}>
+      {/* Run results (from global store) */}
+      {isDone && migration.result && (
+        <Card className={cn(migration.result.failed > 0 ? 'border-amber-300' : 'border-emerald-300')}>
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              {runResult.failed > 0 ? <AlertCircle className="h-5 w-5 text-amber-600" /> : <CheckCircle2 className="h-5 w-5 text-emerald-600" />}
-              Hasil Migrasi
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-base">
+                {migration.result.failed > 0 ? <AlertCircle className="h-5 w-5 text-amber-600" /> : <CheckCircle2 className="h-5 w-5 text-emerald-600" />}
+                Hasil Migrasi
+              </CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => resetMigration()}>Tutup</Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <StatBox label="Dipindah" value={runResult.migrated} color="text-emerald-600" />
-              <StatBox label="Dilewati" value={runResult.skipped} color="text-blue-600" />
-              <StatBox label="Gagal" value={runResult.failed} color="text-rose-600" />
-              <StatBox label="Total Bytes" value={runResult.totalBytesMigratedFormatted ?? runResult.totalBytesMigrated} color="text-foreground" />
+              <StatBox label="Dipindah" value={migration.result.migrated} color="text-emerald-600" />
+              <StatBox label="Dilewati" value={migration.result.skipped} color="text-blue-600" />
+              <StatBox label="Gagal" value={migration.result.failed} color="text-rose-600" />
+              <StatBox label="Total Bytes" value={migration.result.totalBytesMigratedFormatted ?? migration.result.totalBytesMigrated} color="text-foreground" />
             </div>
-            <p className="text-xs text-muted-foreground">Mode: <strong>{runResult.mode}</strong>{runResult.message ? ` · ${runResult.message}` : ''}</p>
-            {runResult.errors && runResult.errors.length > 0 && (
+            <p className="text-xs text-muted-foreground">Mode: <strong>{migration.result.mode}</strong>{migration.result.message ? ` · ${migration.result.message}` : ''}</p>
+            {migration.result.errors && migration.result.errors.length > 0 && (
               <div className="rounded-md border border-rose-200 bg-rose-50 p-3 dark:border-rose-900 dark:bg-rose-950/30">
-                <p className="mb-2 text-xs font-medium text-rose-700 dark:text-rose-300">{runResult.errors.length} error terjadi:</p>
+                <p className="mb-2 text-xs font-medium text-rose-700 dark:text-rose-300">{migration.result.errors.length} error terjadi:</p>
                 <ul className="max-h-40 space-y-1 overflow-y-auto text-xs text-rose-700 dark:text-rose-300">
-                  {runResult.errors.map((e, i) => (
+                  {migration.result.errors.map((e, i) => (
                     <li key={i} className="flex items-start gap-2"><Trash2 className="mt-0.5 h-3 w-3 shrink-0" /><span><strong>{e.fileName}</strong>: {e.error}</span></li>
                   ))}
                 </ul>
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Error state from global store */}
+      {migration.status === 'error' && !migration.result && (
+        <Card className="border-rose-300">
+          <CardContent className="flex items-center gap-3 p-4">
+            <AlertCircle className="h-5 w-5 text-rose-600" />
+            <div className="flex-1">
+              <p className="font-medium text-rose-700 dark:text-rose-300">Migrasi gagal</p>
+              <p className="text-sm text-rose-600 dark:text-rose-400">{migration.error}</p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => resetMigration()}>Tutup</Button>
           </CardContent>
         </Card>
       )}
