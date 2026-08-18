@@ -1,5 +1,4 @@
 // File: src/app/api/accounts/sync-drive/route.ts
-// BARU — buat file ini di path tersebut
 
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
@@ -23,14 +22,9 @@ const GOOGLE_DOC_MIMETYPES = new Set([
  * POST /api/accounts/sync-drive
  * Body: { accountId: string }
  *
- * Lists ALL files from the connected Google Drive (paginated),
- * then upserts them into the VirtualFile table so they appear in the
- * AnsCloud file browser.
- *
- * - Skips Google-native docs (Sheets, Docs, Slides) because they
- *   cannot be downloaded as regular blobs via the Drive API.
- * - Uses upsert by (userId, physicalFileId) so re-sync is safe.
- * - Max 10 000 files per sync (Vercel serverless timeout guard).
+ * Lists files OWNED by the user from Google Drive (excludes shared files),
+ * upserts them into VirtualFile, and soft-deletes files that no longer
+ * appear in the Drive scan (e.g. shared files that were previously synced).
  */
 export async function POST(req: NextRequest) {
   let userId: string;
@@ -86,7 +80,7 @@ export async function POST(req: NextRequest) {
   oauth2Client.on('tokens', async (tokens) => {
     const data: Record<string, unknown> = {};
     if (tokens.access_token) data.accessToken = tokens.access_token;
-    if (tokens.refresh_token) data.refreshToken = tokens.refreshToken;
+    if (tokens.refresh_token) data.refreshToken = tokens.refresh_token;
     if (tokens.expiry_date) data.tokenExpiresAt = new Date(tokens.expiry_date);
     if (Object.keys(data).length > 0) {
       await db.driveAccount.update({ where: { id: account.id }, data });
@@ -95,7 +89,7 @@ export async function POST(req: NextRequest) {
 
   const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
-  // ── Paginate through ALL files ───────────────────────────────
+  // ── Paginate through OWNED files only ────────────────────────
   interface DriveFile {
     id?: string;
     name?: string;
@@ -111,7 +105,7 @@ export async function POST(req: NextRequest) {
   try {
     do {
       const res = await drive.files.list({
-        q: 'trashed = false and \'me\' in owners',
+        q: "trashed = false and 'me' in owners",
         pageSize: 1000,
         pageToken,
         fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime)',
@@ -175,18 +169,33 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── Cleanup: soft-delete files no longer owned by this account ───
+  const scannedIds = new Set(syncableFiles.map((f) => f.id));
+  const staleFiles = await db.virtualFile.findMany({
+    where: { userId, driveAccountId: account.id, deletedAt: null },
+    select: { id: true, physicalFileId: true },
+  });
+  let removed = 0;
+  for (const sf of staleFiles) {
+    if (!scannedIds.has(sf.physicalFileId)) {
+      await db.virtualFile.update({ where: { id: sf.id }, data: { deletedAt: new Date() } });
+      removed++;
+    }
+  }
+
   await logActivity(userId, 'sync_drive', {
     fileName: account.displayName,
-    details: `Drive: ${account.email} | ${created} baru, ${updated} update, ${failed} gagal dari ${syncableFiles.length} file`,
+    details: `Drive: ${account.email} | ${created} baru, ${updated} update, ${removed} file bukan milik akun dihapus, ${failed} gagal dari ${syncableFiles.length} file`,
   });
 
   return NextResponse.json({
     ok: true,
- totalDriveFiles: allFiles.length,
-  syncableFiles: syncableFiles.length,
-  created,
+    totalDriveFiles: allFiles.length,
+    syncableFiles: syncableFiles.length,
+    created,
     updated,
+    removed,
     failed,
-    message: `${created} file baru ditambahkan, ${updated} diperbarui.`,
+    message: `${created} file baru, ${updated} update, ${removed} file bukan milik akun dihapus.`,
   });
 }

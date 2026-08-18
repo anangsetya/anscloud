@@ -108,18 +108,38 @@ export function FilePreviewDialog({
     return `/api/files/preview?id=${encodeURIComponent(file.id)}`;
   }, [file, open]);
 
+  // Compute media types early (needed by effects)
+  const isVideo = file ? (
+    file.mimeType.startsWith('video/') ||
+    ['mp4', 'webm', 'mpeg', 'ogg', '3gp', 'mov'].some(ext => file.mimeType.includes(ext)) ||
+    file.mimeType === 'application/x-mpegURL'
+  ) : false;
+  const isAudio = file ? (
+    file.mimeType.startsWith('audio/') ||
+    ['mp3', 'wav', 'flac', 'aac', 'm4a', 'wma', 'opus'].some(ext => file.mimeType.includes(ext))
+  ) : false;
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // Fetch preview (resets synchronously when file changes)
+  // For video/audio: the <video>/<audio> element handles loading itself.
+  // For others: pre-fetch to verify accessibility before rendering.
   useEffect(() => {
     if (!previewUrl) {
       setLoading(false);
       return;
     }
+
+    // Video/audio stream directly from Google — skip pre-fetch
+    if (isVideo || isAudio) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     let cancelled = false;
@@ -139,7 +159,7 @@ export function FilePreviewDialog({
       if (videoRef.current) videoRef.current.pause();
       if (audioRef.current) audioRef.current.pause();
     };
-  }, [previewUrl]);
+  }, [previewUrl, isVideo, isAudio]);
 
   // Pause media when dialog closes
   useEffect(() => {
@@ -169,19 +189,7 @@ export function FilePreviewDialog({
 
   const mime = file.mimeType;
   const isImage = mime.startsWith('image/') || mime.includes('svg');
-  const isVideo =
-    mime.startsWith('video/') ||
-    mime.includes('mp4') ||
-    mime.includes('webm') ||
-    mime.includes('mpeg') ||
-    mime === 'application/x-mpegURL' ||
-    mime === 'application/ogg';
-  const isAudio =
-    mime.startsWith('audio/') ||
-    mime.includes('mp3') ||
-    mime.includes('wav') ||
-    mime.includes('flac') ||
-    mime.includes('aac');
+  // isVideo and isAudio are already computed above for the effect
   const isPdf = mime === 'application/pdf';
   const isText =
     mime.startsWith('text/') ||
