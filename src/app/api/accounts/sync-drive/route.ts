@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
   try {
     do {
       const res = await drive.files.list({
-        q: 'trashed = false and \'me\' in owners'
+        q: 'trashed = false and \'me\' in owners',
         pageSize: 1000,
         pageToken,
         fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime)',
