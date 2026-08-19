@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   ArrowLeftRight,
   RefreshCw,
@@ -90,8 +90,19 @@ export function MigrateView({ accounts, loading, onChanged }: MigrateViewProps) 
   const [sourceId, setSourceId] = useState<string>('');
   const [targetId, setTargetId] = useState<string>('');
   const [deleteOriginals, setDeleteOriginals] = useState(false);
-  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
+
+  // Derive category selection from actual file selections (no sync issues)
+  const selectedCategories = useMemo(() => {
+    if (!scanResult) return new Set<string>();
+    const cats = new Set<string>();
+    for (const folder of scanResult.folders) {
+      if (folder.files.some((f) => selectedFileIds.has(f.id))) {
+        cats.add(folder.folderName);
+      }
+    }
+    return cats;
+  }, [scanResult, selectedFileIds]);
 
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -145,7 +156,6 @@ export function MigrateView({ accounts, loading, onChanged }: MigrateViewProps) 
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error ?? 'Gagal scan'); }
       const data = (await res.json()) as ScanResult;
       setScanResult(data);
-      setSelectedCategories(new Set(data.folders.map((f) => f.folderName)));
       const allIds = new Set<string>();
       data.folders.forEach((f) => f.files.forEach((fi) => allIds.add(fi.id)));
       setSelectedFileIds(allIds);
@@ -174,7 +184,9 @@ export function MigrateView({ accounts, loading, onChanged }: MigrateViewProps) 
         body: JSON.stringify({
           sourceAccountId: sourceId, targetAccountId: targetId,
           fileIds: Array.from(selectedFileIds),
-          folderCategories: Array.from(selectedCategories),
+          folderCategories: scanResult
+            ? scanResult.folders.filter((f) => f.files.some((fi) => selectedFileIds.has(fi.id))).map((f) => f.folderName)
+            : [],
           deleteOriginals: sourceId !== targetId ? deleteOriginals : false,
         }),
       });
@@ -192,20 +204,19 @@ export function MigrateView({ accounts, loading, onChanged }: MigrateViewProps) 
   }
 
   function toggleCategory(name: string) {
-    setSelectedCategories((prev) => {
-      const next = new Set(prev); if (next.has(name)) next.delete(name); else next.add(name);
-      if (scanResult) {
-        const folder = scanResult.folders.find((f) => f.folderName === name);
-        if (folder) {
-          setSelectedFileIds((prevIds) => {
-            const nextIds = new Set(prevIds);
-            if (next.has(name)) { folder.files.forEach((f) => nextIds.delete(f.id)); }
-            else { folder.files.forEach((f) => nextIds.add(f.id)); }
-            return nextIds;
-          });
-        }
+    if (!scanResult) return;
+    const folder = scanResult.folders.find((f) => f.folderName === name);
+    if (!folder) return;
+    const folderFileIds = folder.files.map((f) => f.id);
+    const allFilesSelected = folderFileIds.every((id) => selectedFileIds.has(id));
+    setSelectedFileIds((prevIds) => {
+      const nextIds = new Set(prevIds);
+      if (allFilesSelected) {
+        folderFileIds.forEach((id) => nextIds.delete(id));
+      } else {
+        folderFileIds.forEach((id) => nextIds.add(id));
       }
-      return next;
+      return nextIds;
     });
   }
 
@@ -218,11 +229,10 @@ export function MigrateView({ accounts, loading, onChanged }: MigrateViewProps) 
     const allIds = new Set<string>();
     scanResult.folders.forEach((f) => f.files.forEach((fi) => allIds.add(fi.id)));
     setSelectedFileIds(allIds);
-    setSelectedCategories(new Set(scanResult.folders.map((f) => f.folderName)));
   }
 
   function deselectAllFiles() {
-    setSelectedFileIds(new Set()); setSelectedCategories(new Set());
+    setSelectedFileIds(new Set());
   }
 
   const totalSelectedFiles = selectedFileIds.size;

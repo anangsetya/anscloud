@@ -202,8 +202,8 @@ export async function listGoogleDriveFiles(
   const auth = await getAuthenticatedClient(account);
   const drive = google.drive({ version: 'v3', auth });
 
-  // Build query: not trashed; optionally filter by parent.
-  let q = "trashed = false";
+  // Build query: not trashed, owned by user; optionally filter by parent.
+  let q = "trashed = false and 'me' in owners";
   if (options.parentFolderId) {
     q += ` and '${options.parentFolderId}' in parents`;
   }

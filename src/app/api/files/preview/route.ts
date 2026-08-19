@@ -68,46 +68,18 @@ export async function GET(req: NextRequest) {
   const isVideo = isVideoMime(file.mimeType);
   const isAudio = isAudioMime(file.mimeType);
 
-  // ── Video/audio on Google Drive: stream proxy (no size limit) ──
+  // ── Video/audio on Google Drive: redirect to stream URL ──
+  // Vercel serverless cannot proxy large streams reliably.
+  // Instead, redirect the browser directly to Google Drive's media endpoint.
+  // <video>/<audio> without crossorigin handles cross-origin media in no-cors mode.
   if ((isVideo || isAudio) && file.driveAccount.provider === 'google') {
     try {
       const token = await getFreshAccessToken(file.driveAccount);
 
-      // Forward Range header for video seeking
-      const gHeaders: Record<string, string> = {
-        Authorization: `Bearer ${token}`,
-      };
-      const rangeHeader = req.headers.get('range');
-      if (rangeHeader) gHeaders['Range'] = rangeHeader;
+      const params = new URLSearchParams({ alt: 'media', access_token: token });
+      const streamUrl = `https://www.googleapis.com/drive/v3/files/${file.physicalFileId}?${params.toString()}`;
 
-      const gResponse = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${file.physicalFileId}?alt=media`,
-        { headers: gHeaders }
-      );
-
-      if (!gResponse.ok) {
-        return NextResponse.json(
-          { error: `Gagal mengambil file dari Google Drive (HTTP ${gResponse.status}).` },
-          { status: gResponse.status }
-        );
-      }
-
-      // Build response headers — forward Content-Range, Content-Length for seeking
-      const respHeaders: Record<string, string> = {
-        'Content-Type': gResponse.headers.get('content-type') || file.mimeType,
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'private, max-age=60',
-      };
-      const cr = gResponse.headers.get('content-range');
-      if (cr) respHeaders['Content-Range'] = cr;
-      const cl = gResponse.headers.get('content-length');
-      if (cl) respHeaders['Content-Length'] = cl;
-
-      // Stream the response body directly (no buffering)
-      return new NextResponse(gResponse.body as ReadableStream, {
-        status: gResponse.status,
-        headers: respHeaders,
-      });
+      return NextResponse.redirect(streamUrl, 307);
     } catch (err) {
       return NextResponse.json(
         { error: err instanceof Error ? err.message : 'Gagal streaming file.' },
