@@ -91,6 +91,9 @@ export function MigrateView({ accounts, loading, onChanged }: MigrateViewProps) 
   const [targetId, setTargetId] = useState<string>('');
   const [deleteOriginals, setDeleteOriginals] = useState(false);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   // Derive category selection from actual file selections (no sync issues)
   const selectedCategories = useMemo(() => {
@@ -103,10 +106,6 @@ export function MigrateView({ accounts, loading, onChanged }: MigrateViewProps) 
     }
     return cats;
   }, [scanResult, selectedFileIds]);
-
-  const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   const { toast } = useToast();
 
